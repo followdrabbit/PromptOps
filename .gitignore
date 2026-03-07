@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# PromptOps data
+data/*
+!data/.gitkeep
+!data/imports/.gitkeep
+!data/exports/.gitkeep
+!data/logs/.gitkeep
+!data/audit/.gitkeep
+data/.master_key
+*.db
+*.sqlite
+*.sqlite3

@@ -1,0 +1,7 @@
+streamlit>=1.32.0
+sqlalchemy>=2.0.0
+pydantic>=2.5.0
+pandas>=2.1.0
+openpyxl>=3.1.0
+cryptography>=42.0.0
+requests>=2.31.0

@@ -1,0 +1,14 @@
+[app]
+name = "PromptOps"
+language = "en"
+log_level = "INFO"
+default_timeout = 30
+output_dir = "data/exports"
+import_dir = "data/imports"
+db_path = "data/promptops.db"
+app_log_path = "data/logs/app.log"
+audit_log_path = "data/audit/audit.log"
+log_retention_days = 30
+audit_verbosity = "standard"
+tools_enabled = true
+secure_storage = "fernet"
