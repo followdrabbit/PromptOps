@@ -22,6 +22,36 @@ def create_session(session: Session, title: str, endpoint_id: int) -> models.Cha
     return chat_session
 
 
+def rename_session(session: Session, chat_session: models.ChatSession, new_title: str) -> models.ChatSession:
+    normalized = new_title.strip()
+    if not normalized or normalized == chat_session.title:
+        return chat_session
+    before = {"title": chat_session.title}
+    chat_session.title = normalized
+    chat_session.updated_at = datetime.utcnow()
+    session.add(chat_session)
+    record_event(
+        session,
+        "update",
+        "chat_session",
+        chat_session.id,
+        before_value=before,
+        after_value={"title": normalized},
+    )
+    return chat_session
+
+
+def delete_session(session: Session, chat_session: models.ChatSession) -> None:
+    record_event(
+        session,
+        "delete",
+        "chat_session",
+        chat_session.id,
+        before_value={"title": chat_session.title},
+    )
+    session.delete(chat_session)
+
+
 def add_message(session: Session, session_id: int, role: str, content: str, metadata: dict | None = None) -> models.ChatMessage:
     msg = models.ChatMessage(session_id=session_id, role=role, content=content, meta=metadata)
     session.add(msg)

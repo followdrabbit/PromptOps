@@ -12,3 +12,4 @@ log_retention_days = 30
 audit_verbosity = "standard"
 tools_enabled = true
 secure_storage = "fernet"
+ssl_verify = true

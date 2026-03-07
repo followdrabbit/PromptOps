@@ -23,6 +23,7 @@ class AppConfig:
     audit_verbosity: str = "standard"
     tools_enabled: bool = True
     secure_storage: str = "fernet"
+    ssl_verify: bool = True
 
     @property
     def output_path(self) -> Path:
@@ -66,6 +67,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         audit_verbosity=app.get("audit_verbosity", "standard"),
         tools_enabled=bool(app.get("tools_enabled", True)),
         secure_storage=app.get("secure_storage", "fernet"),
+        ssl_verify=bool(app.get("ssl_verify", True)),
     )
 
 

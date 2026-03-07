@@ -21,6 +21,7 @@ def run_test_suite(
     suite: models.TestSuite,
     endpoint: models.Endpoint,
     tests: list[models.TestCase],
+    verify_ssl: bool = True,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> models.TestRun:
     run = models.TestRun(
@@ -35,12 +36,17 @@ def run_test_suite(
     session.add(run)
     session.flush()
     record_event(session, "execute", "test_run", run.id, after_value={"suite": suite.name})
+    logger.debug(
+        "Starting test run run_id=%s suite_id=%s endpoint_id=%s total_enabled=%s",
+        run.id,
+        suite.id,
+        endpoint.id,
+        run.total_tests,
+    )
 
-    secret = None
-    if endpoint.auth_type != "none":
-        secret = SecretManager().get_secret(session, endpoint.id)
+    variables = SecretManager().get_variables(session, endpoint.id)
     provider_class = get_provider_class(endpoint.provider)
-    provider = provider_class(endpoint, secret)
+    provider = provider_class(endpoint, variables, verify_ssl=verify_ssl)
 
     completed = 0
     enabled_tests = [test for test in tests if test.enabled]
@@ -49,8 +55,14 @@ def run_test_suite(
         status = "passed"
         response_text = None
         error_message = None
+        logger.debug(
+            "Executing test run_id=%s test_id=%s test_name=%s",
+            run.id,
+            test.id,
+            test.test_name,
+        )
         try:
-            params: dict[str, Any] = dict(endpoint.default_params or {})
+            params: dict[str, Any] = {}
             if test.temperature is not None:
                 params["temperature"] = test.temperature
             if test.max_tokens is not None:
@@ -81,6 +93,13 @@ def run_test_suite(
                 error_message=error_message,
             )
             session.add(result)
+            logger.debug(
+                "Finished test run_id=%s test_id=%s status=%s latency_ms=%s",
+                run.id,
+                test.id,
+                status,
+                latency,
+            )
         completed += 1
         if progress_callback:
             progress_callback(completed, len(enabled_tests))

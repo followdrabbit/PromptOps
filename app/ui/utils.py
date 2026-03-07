@@ -21,6 +21,7 @@ SETTINGS_KEYS = {
     "log_retention_days": "log_retention_days",
     "secure_storage": "secure_storage",
     "audit_verbosity": "audit_verbosity",
+    "ssl_verify": "ssl_verify",
 }
 
 
@@ -35,6 +36,7 @@ def get_runtime_settings(session: Session, config: AppConfig) -> dict[str, Any]:
         "log_retention_days": int(get_setting(session, "log_retention_days", str(config.log_retention_days))),
         "secure_storage": get_setting(session, "secure_storage", config.secure_storage),
         "audit_verbosity": get_setting(session, "audit_verbosity", config.audit_verbosity),
+        "ssl_verify": get_setting(session, "ssl_verify", str(config.ssl_verify)).lower() == "true",
     }
 
 

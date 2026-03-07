@@ -20,13 +20,18 @@ def create_endpoint(
     data: dict,
     secret_value: str | None = None,
     secret_type: str = "api_key",
+    variable_values: dict[str, str] | None = None,
 ) -> models.Endpoint:
     endpoint = models.Endpoint(**data)
     session.add(endpoint)
     session.flush()
 
-    if secret_value:
-        SecretManager().store_secret(session, endpoint.id, secret_value, secret_type)
+    if variable_values is not None or secret_value:
+        stored_variables = dict(variable_values or {})
+        if secret_value:
+            stored_variables["API_TOKEN"] = secret_value
+        if stored_variables:
+            SecretManager().store_variables(session, endpoint.id, stored_variables, secret_type="template_vars")
 
     record_event(session, "create", "endpoint", endpoint.id, after_value=data)
     return endpoint
@@ -38,6 +43,7 @@ def update_endpoint(
     data: dict,
     secret_value: str | None = None,
     secret_type: str = "api_key",
+    variable_values: dict[str, str] | None = None,
 ) -> models.Endpoint:
     before = {
         "name": endpoint.name,
@@ -52,8 +58,12 @@ def update_endpoint(
     for key, value in data.items():
         setattr(endpoint, key, value)
 
-    if secret_value:
-        SecretManager().store_secret(session, endpoint.id, secret_value, secret_type)
+    if variable_values is not None or secret_value:
+        stored_variables = dict(variable_values or {})
+        if secret_value:
+            stored_variables["API_TOKEN"] = secret_value
+        if stored_variables:
+            SecretManager().store_variables(session, endpoint.id, stored_variables, secret_type="template_vars")
         record_event(session, "rotate", "endpoint_secret", endpoint.id)
 
     record_event(session, "update", "endpoint", endpoint.id, before_value=before, after_value=data)

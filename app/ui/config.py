@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -8,6 +9,9 @@ import pandas as pd
 import streamlit as st
 
 from app.core.config import AppConfig
+from app.core.logging import set_log_level
+from app.core.redaction import mask_secret
+from app.core.secrets import SecretManager
 from app.core.security import is_safe_path
 from app.core.paths import ROOT_DIR
 from app.domain import models
@@ -40,6 +44,15 @@ TEST_FIELDS = [
     "notes",
 ]
 
+RESERVED_TEMPLATE_VARS = {"API_TOKEN", "MODEL_NAME", "PROMPT"}
+TEMPLATE_VAR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+TEMPLATE_VAR_PATTERNS = (
+    re.compile(r"\{\{\s*(" + TEMPLATE_VAR_NAME + r")\s*\}\}"),
+    re.compile(r"\$\{(" + TEMPLATE_VAR_NAME + r")\}"),
+    re.compile(r"<(" + TEMPLATE_VAR_NAME + r")>"),
+)
+BARE_RESERVED_PATTERN = re.compile(r"\b(API_TOKEN|MODEL_NAME|PROMPT)\b")
+
 
 def _safe_resolve(path_input: str, base: Path) -> Path:
     candidate = (base / path_input).resolve() if not Path(path_input).is_absolute() else Path(path_input).resolve()
@@ -60,6 +73,32 @@ def _split_endpoint_url(url: str) -> tuple[str, str]:
             path = f"{path}?{parsed.query}"
         return base_url, path
     return url, "/"
+
+
+def _extract_template_variables(*texts: str) -> list[str]:
+    variables: set[str] = set()
+    for text in texts:
+        if not text:
+            continue
+        for pattern in TEMPLATE_VAR_PATTERNS:
+            variables.update(pattern.findall(text))
+        variables.update(BARE_RESERVED_PATTERN.findall(text))
+    return sorted(variables)
+
+
+def _parse_variable_values(raw: str) -> dict[str, str]:
+    if not raw.strip():
+        return {}
+    parsed = parse_json_field(raw)
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError("variables_json_type")
+    return {
+        str(key).strip(): "" if value is None else str(value)
+        for key, value in parsed.items()
+        if str(key).strip()
+    }
 
 
 def render(context: dict) -> None:
@@ -132,6 +171,11 @@ def render(context: dict) -> None:
                 output_dir = st.text_input(tr("label_output_dir"), value=settings["output_dir"])
                 import_dir = st.text_input(tr("label_import_dir"), value=settings["import_dir"])
                 tools_enabled = st.checkbox(tr("label_enable_tools"), value=settings["tools_enabled"])
+                ssl_verify = st.checkbox(
+                    tr("label_verify_ssl"),
+                    value=settings.get("ssl_verify", True),
+                    help=tr("help_verify_ssl"),
+                )
                 log_retention_days = st.number_input(
                     tr("label_log_retention"),
                     min_value=1,
@@ -158,9 +202,11 @@ def render(context: dict) -> None:
                         set_setting(session, "output_dir", str(output_dir))
                         set_setting(session, "import_dir", str(import_dir))
                         set_setting(session, "tools_enabled", str(tools_enabled))
+                        set_setting(session, "ssl_verify", str(ssl_verify))
                         set_setting(session, "log_retention_days", str(log_retention_days))
                         set_setting(session, "secure_storage", secure_storage)
                         set_setting(session, "audit_verbosity", audit_verbosity)
+                        set_log_level(log_level)
                         record_event(session, "update", "settings", "general")
                         st.success(tr("msg_settings_saved"))
 
@@ -273,72 +319,189 @@ def render(context: dict) -> None:
             if not provider_names:
                 st.info(tr("no_providers"))
             st.info(tr("endpoint_tips"))
+            create_defaults = {
+                "create_ep_name": "",
+                "create_ep_provider_select": "",
+                "create_ep_provider_text": "",
+                "create_ep_url": "",
+                "create_ep_model_name": "",
+                "create_ep_api_token": "",
+                "create_ep_headers": "",
+                "create_ep_body": "",
+                "create_ep_response_paths": "",
+                "create_ep_response_type": "",
+                "create_ep_extra_vars": "",
+            }
+            for state_key, state_value in create_defaults.items():
+                if state_key not in st.session_state:
+                    st.session_state[state_key] = state_value
+
+            if st.button(tr("button_fill_endpoint_example"), key="button_fill_endpoint_example"):
+                st.session_state["create_ep_name"] = "Example Endpoint"
+                if provider_names:
+                    if "OpenAI" in provider_names:
+                        st.session_state["create_ep_provider_select"] = "OpenAI"
+                    else:
+                        st.session_state["create_ep_provider_select"] = provider_names[0]
+                else:
+                    st.session_state["create_ep_provider_text"] = "OpenAI"
+                st.session_state["create_ep_url"] = "https://api.openai.com/v1/responses"
+                st.session_state["create_ep_model_name"] = "gpt-4.1-mini"
+                st.session_state["create_ep_headers"] = (
+                    '{\n'
+                    '  "Content-Type": "application/json",\n'
+                    '  "Authorization": "Bearer {{API_TOKEN}}"\n'
+                    '}'
+                )
+                st.session_state["create_ep_body"] = (
+                    '{\n'
+                    '  "model": "{{MODEL_NAME}}",\n'
+                    '  "input": "{{PROMPT}}",\n'
+                    '  "max_output_tokens": 1000,\n'
+                    '  "temperature": 0.7\n'
+                    '}'
+                )
+                st.session_state["create_ep_response_paths"] = "$output[1].content[0].text\n$output[0].content[0].text"
+                st.session_state["create_ep_response_type"] = "json"
+                st.session_state["create_ep_extra_vars"] = "{}"
+
             with st.form("create_endpoint"):
-                name = st.text_input(tr("label_friendly_name"), help=tr("help_friendly_name"))
+                name = st.text_input(
+                    tr("label_friendly_name"),
+                    help=tr("help_friendly_name"),
+                    key="create_ep_name",
+                )
                 if provider_names:
                     provider = st.selectbox(
                         tr("label_provider"),
-                        provider_names,
-                        format_func=lambda name: provider_display.get(name, name),
+                        [""] + provider_names,
+                        format_func=lambda name: tr("option_select_provider")
+                        if not name
+                        else provider_display.get(name, name),
                         help=tr("help_endpoint_provider"),
+                        key="create_ep_provider_select",
                     )
                 else:
-                    provider = st.text_input(tr("label_provider"), help=tr("help_endpoint_provider"))
+                    provider = st.text_input(
+                        tr("label_provider"),
+                        help=tr("help_endpoint_provider"),
+                        key="create_ep_provider_text",
+                    )
                 endpoint_url = st.text_input(
                     tr("label_endpoint_url"),
-                    value="https://api.example.com/v1/chat/completions",
                     help=tr("help_endpoint_url"),
+                    key="create_ep_url",
                 )
-                model_name = st.text_input(tr("label_model_name"), value="model-name", help=tr("help_model_name"))
+                model_name = st.text_input(
+                    tr("label_model_name"),
+                    help=tr("help_model_name"),
+                    key="create_ep_model_name",
+                )
+                api_token = st.text_input(
+                    tr("label_api_token"),
+                    type="password",
+                    help=tr("help_api_token"),
+                    key="create_ep_api_token",
+                )
                 custom_headers_raw = st.text_area(
                     tr("label_headers"),
-                    value='{\n  "Content-Type": "application/json",\n  "x-api-key": "<API_TOKEN>",\n  "anthropic-version": "2023-06-01"\n}',
                     help=tr("help_headers"),
+                    key="create_ep_headers",
                 )
                 default_params_raw = st.text_area(
                     tr("label_body"),
-                    value='{\n  "model": "MODEL_NAME",\n  "system": "You are a helpful assistant.",\n  "messages": [\n    {\n      "role": "user",\n      "content": "<PROMPT>"\n    }\n  ],\n  "max_tokens": 1000,\n  "temperature": 0.7\n}',
                     help=tr("help_body"),
+                    key="create_ep_body",
                 )
                 response_paths = st.text_area(
                     tr("label_response_paths"),
-                    value="$content[0].text",
                     help=tr("help_response_paths"),
+                    key="create_ep_response_paths",
                 )
                 response_type = st.selectbox(
                     tr("label_response_type"),
-                    ["json", "text"],
-                    format_func=lambda val: tr("option_json") if val == "json" else tr("option_text"),
+                    ["", "json", "text"],
+                    format_func=lambda val: tr("option_select")
+                    if not val
+                    else (tr("option_json") if val == "json" else tr("option_text")),
                     help=tr("help_response_type"),
+                    key="create_ep_response_type",
+                )
+                extra_variables_raw = st.text_area(
+                    tr("label_additional_variables"),
+                    help=tr("help_additional_variables"),
+                    key="create_ep_extra_vars",
+                )
+                detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
+                st.caption(
+                    tr(
+                        "label_detected_variables",
+                        values=", ".join(detected_variables) if detected_variables else tr("option_none"),
+                    )
                 )
                 submit = st.form_submit_button(tr("button_create_endpoint"))
 
                 if submit:
                     try:
-                        custom_headers = parse_json_field(custom_headers_raw) or {}
-                        default_params = parse_json_field(default_params_raw) or {}
-                        if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
-                            raise ValueError("json_type")
-                        base_url, endpoint_path = _split_endpoint_url(endpoint_url)
-                        data = {
-                            "name": name,
-                            "provider": provider,
-                            "base_url": base_url,
-                            "endpoint_path": endpoint_path,
-                            "model_name": model_name,
-                            "auth_type": "none",
-                            "auth_header": None,
-                            "auth_prefix": None,
-                            "custom_headers": custom_headers,
-                            "default_params": default_params,
-                            "timeout": int(settings["default_timeout"]),
-                            "retry_count": 0,
-                            "response_paths": response_paths or None,
-                            "response_type": response_type,
-                            "is_active": True,
-                        }
-                        create_endpoint(session, data, None, secret_type="none")
-                        st.success(tr("msg_endpoint_created"))
+                        required_fields: list[str] = []
+                        if not name.strip():
+                            required_fields.append(tr("label_friendly_name"))
+                        if not provider.strip():
+                            required_fields.append(tr("label_provider"))
+                        if not endpoint_url.strip():
+                            required_fields.append(tr("label_endpoint_url"))
+                        if not model_name.strip():
+                            required_fields.append(tr("label_model_name"))
+                        if not response_type.strip():
+                            required_fields.append(tr("label_response_type"))
+                        if required_fields:
+                            st.error(tr("error_required_fields", fields=", ".join(required_fields)))
+                        else:
+                            custom_headers = parse_json_field(custom_headers_raw) or {}
+                            default_params = parse_json_field(default_params_raw) or {}
+                            custom_variables = _parse_variable_values(extra_variables_raw)
+                            if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
+                                raise ValueError("json_type")
+                            missing_variables = [
+                                variable
+                                for variable in detected_variables
+                                if variable not in RESERVED_TEMPLATE_VARS and variable not in custom_variables
+                            ]
+                            if missing_variables:
+                                st.error(tr("error_missing_template_variables", variables=", ".join(missing_variables)))
+                            elif "API_TOKEN" in detected_variables and not api_token.strip():
+                                st.error(tr("error_api_token_required"))
+                            else:
+                                base_url, endpoint_path = _split_endpoint_url(endpoint_url)
+                                variable_values = dict(custom_variables)
+                                if api_token.strip():
+                                    variable_values["API_TOKEN"] = api_token.strip()
+                                variable_values["MODEL_NAME"] = model_name
+                                data = {
+                                    "name": name,
+                                    "provider": provider,
+                                    "base_url": base_url,
+                                    "endpoint_path": endpoint_path,
+                                    "model_name": model_name,
+                                    "auth_type": "none",
+                                    "auth_header": None,
+                                    "auth_prefix": None,
+                                    "custom_headers": custom_headers,
+                                    "default_params": default_params,
+                                    "timeout": int(settings["default_timeout"]),
+                                    "retry_count": 0,
+                                    "response_paths": response_paths or None,
+                                    "response_type": response_type,
+                                    "is_active": True,
+                                }
+                                create_endpoint(
+                                    session,
+                                    data,
+                                    None,
+                                    secret_type="none",
+                                    variable_values=variable_values,
+                                )
+                                st.success(tr("msg_endpoint_created"))
                     except (json.JSONDecodeError, ValueError):
                         st.error(tr("error_invalid_json"))
                     except Exception as exc:
@@ -352,6 +515,15 @@ def render(context: dict) -> None:
                     format_func=lambda ep_id: next(ep.name for ep in endpoints if ep.id == ep_id),
                 )
                 endpoint = get_endpoint(session, selected_id)
+                secret_manager = SecretManager()
+                endpoint_variables = secret_manager.get_variables(session, endpoint.id) if endpoint else {}
+                stored_api_token = endpoint_variables.get("API_TOKEN", "")
+                masked_token = mask_secret(stored_api_token, show_last=4) if stored_api_token else tr("secret_not_set")
+                stored_custom_variables = {
+                    key: value
+                    for key, value in endpoint_variables.items()
+                    if key not in RESERVED_TEMPLATE_VARS
+                }
 
                 with st.form("edit_endpoint"):
                     name = st.text_input(
@@ -393,6 +565,13 @@ def render(context: dict) -> None:
                         value=endpoint.model_name if endpoint else "",
                         help=tr("help_model_name"),
                     )
+                    st.caption(tr("label_stored_secret", value=masked_token))
+                    api_token = st.text_input(
+                        tr("label_rotate_api_token"),
+                        value="",
+                        type="password",
+                        help=tr("help_rotate_api_token"),
+                    )
                     custom_headers_raw = st.text_area(
                         tr("label_headers"),
                         value=json.dumps(endpoint.custom_headers or {}, indent=2),
@@ -415,34 +594,69 @@ def render(context: dict) -> None:
                         format_func=lambda val: tr("option_json") if val == "json" else tr("option_text"),
                         help=tr("help_response_type"),
                     )
+                    extra_variables_raw = st.text_area(
+                        tr("label_additional_variables"),
+                        value=json.dumps(stored_custom_variables, indent=2) if stored_custom_variables else "{}",
+                        help=tr("help_additional_variables"),
+                    )
+                    detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
+                    st.caption(
+                        tr(
+                            "label_detected_variables",
+                            values=", ".join(detected_variables) if detected_variables else tr("option_none"),
+                        )
+                    )
                     update = st.form_submit_button(tr("button_update_endpoint"))
 
                     if update:
                         try:
                             custom_headers = parse_json_field(custom_headers_raw) or {}
                             default_params = parse_json_field(default_params_raw) or {}
+                            custom_variables = _parse_variable_values(extra_variables_raw)
                             if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
                                 raise ValueError("json_type")
-                            base_url, endpoint_path = _split_endpoint_url(endpoint_url)
-                            data = {
-                                "name": name,
-                                "provider": provider,
-                                "base_url": base_url,
-                                "endpoint_path": endpoint_path,
-                                "model_name": model_name,
-                                "auth_type": "none",
-                                "auth_header": None,
-                                "auth_prefix": None,
-                                "custom_headers": custom_headers,
-                                "default_params": default_params,
-                                "timeout": int(settings["default_timeout"]),
-                                "retry_count": 0,
-                                "response_paths": response_paths or None,
-                                "response_type": response_type,
-                                "is_active": True,
-                            }
-                            update_endpoint(session, endpoint, data, None, secret_type="none")
-                            st.success(tr("msg_endpoint_updated"))
+                            missing_variables = [
+                                variable
+                                for variable in detected_variables
+                                if variable not in RESERVED_TEMPLATE_VARS and variable not in custom_variables
+                            ]
+                            resolved_api_token = api_token.strip() or stored_api_token
+                            if missing_variables:
+                                st.error(tr("error_missing_template_variables", variables=", ".join(missing_variables)))
+                            elif "API_TOKEN" in detected_variables and not resolved_api_token:
+                                st.error(tr("error_api_token_required"))
+                            else:
+                                base_url, endpoint_path = _split_endpoint_url(endpoint_url)
+                                variable_values = dict(custom_variables)
+                                if resolved_api_token:
+                                    variable_values["API_TOKEN"] = resolved_api_token
+                                variable_values["MODEL_NAME"] = model_name
+                                data = {
+                                    "name": name,
+                                    "provider": provider,
+                                    "base_url": base_url,
+                                    "endpoint_path": endpoint_path,
+                                    "model_name": model_name,
+                                    "auth_type": "none",
+                                    "auth_header": None,
+                                    "auth_prefix": None,
+                                    "custom_headers": custom_headers,
+                                    "default_params": default_params,
+                                    "timeout": int(settings["default_timeout"]),
+                                    "retry_count": 0,
+                                    "response_paths": response_paths or None,
+                                    "response_type": response_type,
+                                    "is_active": True,
+                                }
+                                update_endpoint(
+                                    session,
+                                    endpoint,
+                                    data,
+                                    None,
+                                    secret_type="none",
+                                    variable_values=variable_values,
+                                )
+                                st.success(tr("msg_endpoint_updated"))
                         except (json.JSONDecodeError, ValueError):
                             st.error(tr("error_invalid_json"))
                         except Exception as exc:

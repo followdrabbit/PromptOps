@@ -44,6 +44,7 @@ def render(context: dict) -> None:
     )
 
     with get_session(session_factory) as session:
+        runtime_settings = get_runtime_settings(session, config)
         suites = session.query(models.TestSuite).order_by(models.TestSuite.created_at.desc()).all()
         endpoints = [ep for ep in list_endpoints(session) if ep.is_active]
         if not suites:
@@ -99,7 +100,14 @@ def render(context: dict) -> None:
                 status.info(tr("status_completed", completed=completed, total=total))
 
             try:
-                run = run_test_suite(session, suite, endpoint, tests, progress_callback=update_progress)
+                run = run_test_suite(
+                    session,
+                    suite,
+                    endpoint,
+                    tests,
+                    verify_ssl=runtime_settings.get("ssl_verify", True),
+                    progress_callback=update_progress,
+                )
                 st.success(tr("msg_test_run_completed", run_id=run.id))
             except Exception as exc:
                 st.error(tr("error_test_run_failed", error=exc))
@@ -108,8 +116,7 @@ def render(context: dict) -> None:
         run_id = st.number_input(tr("label_run_id"), min_value=1, step=1)
         export_name = st.text_input(tr("label_export_filename"), value=f"run_{run_id}_{datetime.utcnow().date()}")
         if st.button(tr("button_export_xlsx")):
-            settings = get_runtime_settings(session, config)
-            export_dir = (ROOT_DIR / settings["output_dir"]).resolve()
+            export_dir = (ROOT_DIR / runtime_settings["output_dir"]).resolve()
             if not is_safe_path(export_dir, ROOT_DIR):
                 st.error(tr("error_export_dir"))
                 return

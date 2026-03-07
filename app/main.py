@@ -10,7 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 import streamlit as st
 
 from app.core.config import ensure_directories, load_config
-from app.core.logging import setup_logging
+from app.core.logging import set_log_level, setup_logging
 from app.infra.db import build_engine, build_session_factory, get_session, init_db
 from app.ui import chat, config as config_ui, home, tests
 from app.ui.utils import apply_global_styles, get_runtime_settings
@@ -35,7 +35,9 @@ def main() -> None:
     apply_global_styles()
 
     with get_session(session_factory) as session:
-        lang = get_runtime_settings(session, config).get("language", "en")
+        runtime_settings = get_runtime_settings(session, config)
+    set_log_level(runtime_settings.get("log_level", "INFO"))
+    lang = runtime_settings.get("language", "en")
     tr = get_translator(lang)
 
     topbar = st.container()
