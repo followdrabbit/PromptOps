@@ -187,6 +187,19 @@ class OpenAICompatibleProvider:
                         return "\n".join(extracted)
         return ""
 
+    @staticmethod
+    def _extract_incomplete_reason(data: Any) -> str | None:
+        if not isinstance(data, dict):
+            return None
+        if data.get("status") != "incomplete":
+            return None
+        details = data.get("incomplete_details")
+        if isinstance(details, dict):
+            reason = details.get("reason")
+            if reason:
+                return str(reason)
+        return "unknown"
+
     def send_prompt(self, messages: list[dict[str, Any]], params: dict[str, Any]) -> ProviderResponse:
         prompt_text = ""
         for msg in reversed(messages):
@@ -217,7 +230,7 @@ class OpenAICompatibleProvider:
         base_url = self.endpoint.base_url.rstrip("/")
         endpoint_path = (self.endpoint.endpoint_path or "").lstrip("/")
         url = f"{base_url}/{endpoint_path}" if endpoint_path else base_url
-        timeout = self.endpoint.timeout or params.get("timeout")
+        timeout = params.get("timeout") or self.endpoint.timeout
         retries = self.endpoint.retry_count or 0
 
         headers = self._build_headers(runtime_vars)
@@ -324,6 +337,14 @@ class OpenAICompatibleProvider:
                 latency_ms,
                 self._to_preview(redact_dict(dict(response.headers)), 2_000),
                 self._to_preview(data, self.RESPONSE_PREVIEW_LIMIT),
+            )
+        incomplete_reason = self._extract_incomplete_reason(data)
+        if incomplete_reason:
+            self.logger.warning(
+                "Provider response incomplete request_id=%s endpoint=%s reason=%s",
+                request_id,
+                self.endpoint.name,
+                incomplete_reason,
             )
 
         if self.endpoint.response_paths:

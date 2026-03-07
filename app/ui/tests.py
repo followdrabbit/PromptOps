@@ -87,7 +87,7 @@ def render(context: dict) -> None:
                     }
                     for test in tests
                 ],
-                use_container_width=True,
+                width="stretch",
             )
 
         if st.button(tr("button_run_tests")):
@@ -105,6 +105,7 @@ def render(context: dict) -> None:
                     suite,
                     endpoint,
                     tests,
+                    default_timeout=int(runtime_settings.get("default_timeout", 30)),
                     verify_ssl=runtime_settings.get("ssl_verify", True),
                     progress_callback=update_progress,
                 )

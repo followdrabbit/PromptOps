@@ -21,6 +21,7 @@ def run_test_suite(
     suite: models.TestSuite,
     endpoint: models.Endpoint,
     tests: list[models.TestCase],
+    default_timeout: int | None = None,
     verify_ssl: bool = True,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> models.TestRun:
@@ -67,6 +68,8 @@ def run_test_suite(
                 params["temperature"] = test.temperature
             if test.max_tokens is not None:
                 params["max_tokens"] = test.max_tokens
+            if default_timeout is not None:
+                params["timeout"] = int(default_timeout)
             payload = [{"role": "user", "content": test.prompt}]
             response = provider.send_prompt(payload, params)
             response_text = response.content

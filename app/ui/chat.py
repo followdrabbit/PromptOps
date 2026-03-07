@@ -100,7 +100,7 @@ def render(context: dict) -> None:
             if row[0].button(
                 button_label,
                 key=f"chat_pick_{endpoint.id}_{session_item.id}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[session_select_key] = session_item.id
                 st.rerun()
@@ -108,7 +108,7 @@ def render(context: dict) -> None:
                 " ",
                 icon=":material/delete:",
                 key=f"chat_trash_{endpoint.id}_{session_item.id}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state[pending_delete_key] = session_item.id
                 st.rerun()
@@ -127,7 +127,7 @@ def render(context: dict) -> None:
                 if confirm_cols[0].button(
                     tr("button_confirm_delete_chat"),
                     key=f"chat_confirm_delete_{endpoint.id}_{pending_delete_session.id}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     delete_session(session, pending_delete_session)
                     session.commit()
@@ -141,7 +141,7 @@ def render(context: dict) -> None:
                 if confirm_cols[1].button(
                     tr("button_cancel_delete_chat"),
                     key=f"chat_cancel_delete_{endpoint.id}_{pending_delete_session.id}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state.pop(pending_delete_key, None)
                     st.rerun()
@@ -224,7 +224,10 @@ def render(context: dict) -> None:
                     variables,
                     verify_ssl=runtime_settings.get("ssl_verify", True),
                 )
-                response = provider.send_prompt(messages, {})
+                response = provider.send_prompt(
+                    messages,
+                    {"timeout": int(runtime_settings.get("default_timeout", 30))},
+                )
                 add_message(
                     session,
                     chat_session.id,

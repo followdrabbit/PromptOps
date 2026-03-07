@@ -72,6 +72,12 @@ def render(context: dict) -> None:
                     <p class="card-body">{tr("card_body_chat")}</p>
                     <div class="card-action">{tr("card_action_open")}</div>
                 </a>
+                <a class="card" href="?nav=Compare" target="_self">
+                    <span class="card-badge">{tr("card_badge_compare")}</span>
+                    <div class="card-title">{tr("card_title_compare")}</div>
+                    <p class="card-body">{tr("card_body_compare")}</p>
+                    <div class="card-action">{tr("card_action_open")}</div>
+                </a>
                 <a class="card" href="?nav=Automated%20Tests" target="_self">
                     <span class="card-badge">{tr("card_badge_execution")}</span>
                     <div class="card-title">{tr("card_title_tests")}</div>
@@ -103,7 +109,7 @@ def render(context: dict) -> None:
                     }
                     for run in recent_runs
                 ],
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info(tr("no_test_executions"))
@@ -126,7 +132,7 @@ def render(context: dict) -> None:
                     }
                     for endpoint in recent_endpoints
                 ],
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info(tr("no_endpoints"))

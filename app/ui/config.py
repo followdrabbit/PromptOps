@@ -208,7 +208,9 @@ def render(context: dict) -> None:
                         set_setting(session, "audit_verbosity", audit_verbosity)
                         set_log_level(log_level)
                         record_event(session, "update", "settings", "general")
+                        session.commit()
                         st.success(tr("msg_settings_saved"))
+                        st.rerun()
 
     with tabs[1]:
         with get_session(session_factory) as session:
@@ -224,7 +226,7 @@ def render(context: dict) -> None:
                         }
                         for provider in providers
                     ],
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info(tr("no_providers"))
@@ -310,7 +312,7 @@ def render(context: dict) -> None:
                         }
                         for ep in endpoints
                     ],
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info(tr("no_endpoints"))
@@ -685,7 +687,7 @@ def render(context: dict) -> None:
                         }
                         for suite in suites
                     ],
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info(tr("no_test_suites"))
