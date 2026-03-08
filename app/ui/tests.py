@@ -46,7 +46,7 @@ def render(context: dict) -> None:
     with get_session(session_factory) as session:
         runtime_settings = get_runtime_settings(session, config)
         suites = session.query(models.TestSuite).order_by(models.TestSuite.created_at.desc()).all()
-        endpoints = [ep for ep in list_endpoints(session) if ep.is_active]
+        endpoints = list_endpoints(session)
         if not suites:
             st.info(tr("info_create_suite_in_config"))
             return

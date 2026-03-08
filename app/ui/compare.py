@@ -165,7 +165,7 @@ def render(context: dict) -> None:
 
     with get_session(session_factory) as session:
         runtime_settings = get_runtime_settings(session, config)
-        endpoints = [endpoint for endpoint in list_endpoints(session) if endpoint.is_active]
+        endpoints = list_endpoints(session)
         if not endpoints:
             st.info(tr("info_create_endpoint_before_chat"))
             return

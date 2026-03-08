@@ -44,17 +44,14 @@ def _generate_sample_providers(output_dir: Path) -> tuple[Path, Path]:
         {
             "name": "OpenAI",
             "notes": "Primary provider for GPT models.",
-            "is_active": True,
         },
         {
             "name": "Anthropic",
             "notes": "Provider for Claude model family.",
-            "is_active": True,
         },
         {
             "name": "AzureFoundry",
             "notes": "Internal Azure AI Foundry integration.",
-            "is_active": False,
         },
     ]
     df = pd.DataFrame(data)
@@ -65,15 +62,93 @@ def _generate_sample_providers(output_dir: Path) -> tuple[Path, Path]:
     return xlsx_path, json_path
 
 
+def _generate_sample_endpoints(output_dir: Path) -> tuple[Path, Path]:
+    json_records = [
+        {
+            "name": "OpenAI Responses - GPT 4.1 Mini",
+            "provider": "OpenAI",
+            "endpoint_url": "https://api.openai.com/v1/responses",
+            "model_name": "gpt-4.1-mini",
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer {{API_TOKEN}}",
+            },
+            "body": {
+                "model": "{{MODEL_NAME}}",
+                "input": "{{PROMPT}}",
+                "max_output_tokens": 1000,
+                "temperature": 0.7,
+            },
+            "response_paths": "$output[1].content[0].text",
+            "response_type": "json",
+            "additional_variables": {},
+            "api_token": "",
+        },
+        {
+            "name": "Anthropic Messages - Sonnet",
+            "provider": "Anthropic",
+            "endpoint_url": "https://api.anthropic.com/v1/messages",
+            "model_name": "claude-sonnet-4-5",
+            "headers": {
+                "Content-Type": "application/json",
+                "x-api-key": "{{API_TOKEN}}",
+                "anthropic-version": "2023-06-01",
+            },
+            "body": {
+                "model": "{{MODEL_NAME}}",
+                "system": "{{SYSTEM_PROMPT}}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "{{PROMPT}}",
+                    }
+                ],
+                "max_tokens": 1000,
+                "temperature": 0.7,
+            },
+            "response_paths": "$content[0].text",
+            "response_type": "json",
+            "additional_variables": {"SYSTEM_PROMPT": "You are a helpful assistant."},
+            "api_token": "",
+        },
+    ]
+
+    xlsx_records: list[dict[str, object]] = []
+    for record in json_records:
+        xlsx_records.append(
+            {
+                "name": record["name"],
+                "provider": record["provider"],
+                "endpoint_url": record["endpoint_url"],
+                "model_name": record["model_name"],
+                "headers": json.dumps(record["headers"], ensure_ascii=False),
+                "body": json.dumps(record["body"], ensure_ascii=False),
+                "response_paths": record["response_paths"],
+                "response_type": record["response_type"],
+                "additional_variables": json.dumps(record["additional_variables"], ensure_ascii=False),
+                "api_token": "",
+            }
+        )
+
+    xlsx_path = output_dir / "sample_endpoints.xlsx"
+    json_path = output_dir / "sample_endpoints.json"
+    pd.DataFrame(xlsx_records).to_excel(xlsx_path, index=False)
+    json_path.write_text(json.dumps(json_records, indent=2, ensure_ascii=False), encoding="utf-8")
+    return xlsx_path, json_path
+
+
 def main() -> None:
     output_dir = Path(__file__).resolve().parent
 
     tests_path = _generate_sample_tests(output_dir)
     providers_xlsx_path, providers_json_path = _generate_sample_providers(output_dir)
+    endpoints_xlsx_path, endpoints_json_path = _generate_sample_endpoints(output_dir)
 
     print(f"Sample tests XLSX written to {tests_path}")
     print(f"Sample providers XLSX written to {providers_xlsx_path}")
     print(f"Sample providers JSON written to {providers_json_path}")
+    print(f"Sample endpoints XLSX written to {endpoints_xlsx_path}")
+    print(f"Sample endpoints JSON written to {endpoints_json_path}")
 
 
 if __name__ == "__main__":

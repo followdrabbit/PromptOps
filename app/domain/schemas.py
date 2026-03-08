@@ -20,7 +20,6 @@ class ProviderSchema(BaseModel):
     compliance: Optional[str] = None
     tags: Optional[str] = None
     notes: Optional[str] = None
-    is_active: bool = True
 
 
 class EndpointSchema(BaseModel):
@@ -40,7 +39,6 @@ class EndpointSchema(BaseModel):
     timeout: Optional[int] = None
     retry_count: Optional[int] = None
     supports_tools: bool = False
-    is_active: bool = True
 
 
 class ChatSessionSchema(BaseModel):

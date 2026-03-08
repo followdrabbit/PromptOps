@@ -18,7 +18,16 @@ from app.core.paths import ROOT_DIR
 from app.domain import models
 from app.infra.db import get_session
 from app.services.audit_service import record_event
-from app.services.endpoint_service import create_endpoint, delete_endpoint, get_endpoint, list_endpoints, update_endpoint
+from app.services.endpoint_service import (
+    create_endpoint,
+    delete_endpoint,
+    endpoints_to_records,
+    get_endpoint,
+    import_endpoint_records,
+    list_endpoints,
+    update_endpoint,
+    validate_endpoint_records,
+)
 from app.services.settings_service import set_setting
 from app.services.test_service import (
     create_suite,
@@ -132,6 +141,38 @@ def _load_provider_records(path: Path) -> list[dict]:
         return [dict(item) for item in content]
 
     raise ValueError("unsupported_file_type")
+
+
+def _load_endpoint_records(path: Path) -> list[dict]:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        dataframe = pd.read_excel(path)
+        return dataframe.to_dict(orient="records")
+
+    if suffix == ".json":
+        content = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(content, dict):
+            if isinstance(content.get("endpoints"), list):
+                content = content["endpoints"]
+            else:
+                content = [content]
+        if not isinstance(content, list):
+            raise ValueError("invalid_json_root")
+        if not all(isinstance(item, dict) for item in content):
+            raise ValueError("invalid_json_records")
+        return [dict(item) for item in content]
+
+    raise ValueError("unsupported_file_type")
+
+
+def _load_template_bytes(relative_path: str) -> bytes | None:
+    template_path = (ROOT_DIR / relative_path).resolve()
+    if not is_safe_path(template_path, ROOT_DIR) or not template_path.exists() or not template_path.is_file():
+        return None
+    try:
+        return template_path.read_bytes()
+    except OSError:
+        return None
 
 
 def render(context: dict) -> None:
@@ -320,7 +361,6 @@ def render(context: dict) -> None:
                             data = {
                                 "name": name,
                                 "notes": notes or None,
-                                "is_active": True,
                             }
                             create_provider(session, data)
                             session.commit()
@@ -438,6 +478,30 @@ def render(context: dict) -> None:
                 else:
                     st.caption(tr("label_approved_import_dir", path=import_base))
                     st.caption(tr("label_approved_output_dir", path=output_base))
+                    st.markdown(f"**{tr('section_templates')}**")
+                    provider_template_xlsx = _load_template_bytes("examples/sample_providers.xlsx")
+                    provider_template_json = _load_template_bytes("examples/sample_providers.json")
+                    template_cols = st.columns(2, gap="small")
+                    template_cols[0].download_button(
+                        tr("button_download_provider_template_xlsx"),
+                        data=provider_template_xlsx or b"",
+                        file_name="sample_providers.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_provider_template_xlsx",
+                        disabled=provider_template_xlsx is None,
+                        width="stretch",
+                    )
+                    template_cols[1].download_button(
+                        tr("button_download_provider_template_json"),
+                        data=provider_template_json or b"",
+                        file_name="sample_providers.json",
+                        mime="application/json",
+                        key="download_provider_template_json",
+                        disabled=provider_template_json is None,
+                        width="stretch",
+                    )
+                    if provider_template_xlsx is None or provider_template_json is None:
+                        st.warning(tr("warning_template_files_missing"))
 
                     st.markdown(f"**{tr('section_import_providers')}**")
                     st.caption(tr("label_provider_supported_formats"))
@@ -596,6 +660,16 @@ def render(context: dict) -> None:
 
     if config_page == "endpoints":
         with get_session(session_factory) as session:
+            endpoint_import_flash_key = "endpoint_import_flash_messages"
+            flash_messages = st.session_state.pop(endpoint_import_flash_key, [])
+            for level, message in flash_messages:
+                if level == "warning":
+                    st.warning(message)
+                elif level == "error":
+                    st.error(message)
+                else:
+                    st.success(message)
+
             st.subheader(tr("section_registered_endpoints"))
             settings = get_runtime_settings(session, config)
             endpoints = list_endpoints(session)
@@ -610,7 +684,6 @@ def render(context: dict) -> None:
                             tr("table_name"): ep.name,
                             tr("table_provider"): ep.provider,
                             tr("table_model"): ep.model_name,
-                            tr("table_active"): ep.is_active,
                         }
                         for ep in endpoints
                     ],
@@ -619,7 +692,7 @@ def render(context: dict) -> None:
             else:
                 st.info(tr("no_endpoints"))
 
-            endpoint_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete")])
+            endpoint_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete"), tr("tab_import_export")])
 
             with endpoint_tabs[0]:
                 st.subheader(tr("section_create_endpoint"))
@@ -799,7 +872,6 @@ def render(context: dict) -> None:
                                         "retry_count": 0,
                                         "response_paths": response_paths or None,
                                         "response_type": response_type,
-                                        "is_active": True,
                                     }
                                     create_endpoint(
                                         session,
@@ -964,7 +1036,6 @@ def render(context: dict) -> None:
                                             "retry_count": 0,
                                             "response_paths": response_paths or None,
                                             "response_type": response_type,
-                                            "is_active": True,
                                         }
                                         update_endpoint(
                                             session,
@@ -1030,6 +1101,241 @@ def render(context: dict) -> None:
                         ):
                             st.session_state.pop(pending_delete_endpoint_key, None)
                             st.rerun()
+
+            with endpoint_tabs[3]:
+                st.subheader(tr("section_endpoint_import_export"))
+                st.info(tr("endpoint_import_export_tips"))
+
+                import_base = _safe_resolve(settings["import_dir"], ROOT_DIR)
+                output_base = _safe_resolve(settings["output_dir"], ROOT_DIR)
+                if not is_safe_path(import_base, ROOT_DIR) or not is_safe_path(output_base, ROOT_DIR):
+                    st.error(tr("error_endpoint_dirs_within_project"))
+                else:
+                    st.caption(tr("label_approved_import_dir", path=import_base))
+                    st.caption(tr("label_approved_output_dir", path=output_base))
+                    st.markdown(f"**{tr('section_templates')}**")
+                    endpoint_template_xlsx = _load_template_bytes("examples/sample_endpoints.xlsx")
+                    endpoint_template_json = _load_template_bytes("examples/sample_endpoints.json")
+                    template_cols = st.columns(2, gap="small")
+                    template_cols[0].download_button(
+                        tr("button_download_endpoint_template_xlsx"),
+                        data=endpoint_template_xlsx or b"",
+                        file_name="sample_endpoints.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_endpoint_template_xlsx",
+                        disabled=endpoint_template_xlsx is None,
+                        width="stretch",
+                    )
+                    template_cols[1].download_button(
+                        tr("button_download_endpoint_template_json"),
+                        data=endpoint_template_json or b"",
+                        file_name="sample_endpoints.json",
+                        mime="application/json",
+                        key="download_endpoint_template_json",
+                        disabled=endpoint_template_json is None,
+                        width="stretch",
+                    )
+                    if endpoint_template_xlsx is None or endpoint_template_json is None:
+                        st.warning(tr("warning_template_files_missing"))
+
+                    st.markdown(f"**{tr('section_import_endpoints')}**")
+                    st.caption(tr("label_endpoint_supported_formats"))
+
+                    import_source: Path | None = None
+                    uploaded = st.file_uploader(
+                        tr("label_upload_endpoint_file"),
+                        type=["xlsx", "json"],
+                        key="endpoint_import_upload",
+                    )
+                    if uploaded:
+                        safe_name = _sanitize_filename(uploaded.name, fallback="endpoints_import.xlsx")
+                        destination = (import_base / safe_name).resolve()
+                        if not is_safe_path(destination, import_base):
+                            st.error(tr("error_endpoint_import_path"))
+                        elif destination.suffix.lower() not in {".xlsx", ".json"}:
+                            st.error(tr("error_endpoint_import_file_type"))
+                        else:
+                            import_base.mkdir(parents=True, exist_ok=True)
+                            destination.write_bytes(uploaded.getbuffer())
+                            import_source = destination
+
+                    if import_source:
+                        try:
+                            raw_records = _load_endpoint_records(import_source)
+                            normalized_records, validation_errors, ignored_key_rows = validate_endpoint_records(
+                                raw_records,
+                                default_timeout=int(settings["default_timeout"]),
+                            )
+                        except (json.JSONDecodeError, ValueError) as exc:
+                            st.error(tr("error_endpoint_import_parse", error=exc))
+                            raw_records = []
+                            normalized_records = []
+                            validation_errors = []
+                            ignored_key_rows = 0
+                        except Exception as exc:
+                            st.error(tr("error_endpoint_import_parse", error=exc))
+                            raw_records = []
+                            normalized_records = []
+                            validation_errors = []
+                            ignored_key_rows = 0
+                        else:
+                            st.caption(
+                                tr(
+                                    "label_endpoint_import_loaded",
+                                    source=import_source.name,
+                                    count=len(raw_records),
+                                )
+                            )
+
+                        if validation_errors:
+                            st.error(tr("error_endpoint_import_validation"))
+                            for issue in validation_errors:
+                                st.write(f"- {issue}")
+
+                        if normalized_records and not validation_errors:
+                            preview_rows = [
+                                {
+                                    tr("table_name"): endpoint_row["name"],
+                                    tr("table_provider"): endpoint_row["provider"],
+                                    tr("label_endpoint_url"): (
+                                        f"{endpoint_row['base_url'].rstrip('/')}/"
+                                        f"{str(endpoint_row['endpoint_path'] or '').lstrip('/')}"
+                                    ).rstrip("/"),
+                                    tr("label_model_name"): endpoint_row["model_name"],
+                                    tr("label_api_token"): "",
+                                }
+                                for endpoint_row in normalized_records
+                            ]
+                            st.dataframe(preview_rows, width="stretch")
+                            if st.button(tr("button_import_endpoints"), key="button_import_endpoints"):
+                                try:
+                                    stats = import_endpoint_records(session, normalized_records)
+                                    record_event(
+                                        session,
+                                        "import",
+                                        "endpoint",
+                                        after_value={
+                                            "source": import_source.name,
+                                            "format": import_source.suffix.lower().lstrip("."),
+                                            "rows": len(normalized_records),
+                                            "created": stats["created"],
+                                            "skipped_existing": stats["skipped_existing"],
+                                            "ignored_api_token_rows": ignored_key_rows,
+                                        },
+                                    )
+                                    session.commit()
+                                    messages: list[tuple[str, str]] = []
+                                    if stats["skipped_existing_names"]:
+                                        messages.append(
+                                            (
+                                                "warning",
+                                                tr(
+                                                    "warning_endpoint_existing_skipped",
+                                                    names=", ".join(stats["skipped_existing_names"]),
+                                                ),
+                                            )
+                                        )
+                                    if ignored_key_rows > 0:
+                                        messages.append(
+                                            (
+                                                "warning",
+                                                tr("warning_endpoint_key_ignored", count=ignored_key_rows),
+                                            )
+                                        )
+                                    messages.append(
+                                        (
+                                            "success",
+                                            tr(
+                                                "msg_endpoints_imported",
+                                                created=stats["created"],
+                                                skipped_existing=stats["skipped_existing"],
+                                            ),
+                                        )
+                                    )
+                                    st.session_state[endpoint_import_flash_key] = messages
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(tr("error_endpoint_import_failed", error=exc))
+
+                    st.markdown(f"**{tr('section_export_endpoints')}**")
+                    if not endpoints:
+                        st.info(tr("no_endpoints"))
+                    else:
+                        export_format = st.selectbox(
+                            tr("label_endpoint_export_format"),
+                            ["xlsx", "json"],
+                            format_func=lambda value: value.upper(),
+                            key="endpoint_export_format",
+                        )
+                        default_export_name = (
+                            f"endpoints_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+                        )
+                        export_filename = st.text_input(
+                            tr("label_endpoint_export_filename"),
+                            value=default_export_name,
+                            key="endpoint_export_filename",
+                        )
+                        allow_overwrite = st.checkbox(
+                            tr("label_endpoint_export_overwrite"),
+                            value=False,
+                            key="endpoint_export_allow_overwrite",
+                        )
+                        if st.button(tr("button_export_endpoints"), key="button_export_endpoints"):
+                            safe_filename = _sanitize_filename(
+                                export_filename,
+                                fallback=f"endpoints_backup.{export_format}",
+                            )
+                            safe_path_name = Path(safe_filename)
+                            if safe_path_name.suffix.lower() != f".{export_format}":
+                                safe_filename = f"{safe_path_name.stem}.{export_format}"
+                            target_path = _safe_resolve(safe_filename, output_base)
+                            if not is_safe_path(target_path, output_base):
+                                st.error(tr("error_endpoint_export_path"))
+                            elif target_path.exists() and not allow_overwrite:
+                                st.error(tr("error_endpoint_export_exists"))
+                            else:
+                                try:
+                                    output_base.mkdir(parents=True, exist_ok=True)
+                                    records = endpoints_to_records(session, endpoints)
+                                    if export_format == "xlsx":
+                                        xlsx_records = []
+                                        for record in records:
+                                            xlsx_record = dict(record)
+                                            xlsx_record["headers"] = json.dumps(
+                                                xlsx_record.get("headers") or {},
+                                                ensure_ascii=False,
+                                            )
+                                            xlsx_record["body"] = json.dumps(
+                                                xlsx_record.get("body") or {},
+                                                ensure_ascii=False,
+                                            )
+                                            xlsx_record["additional_variables"] = json.dumps(
+                                                xlsx_record.get("additional_variables") or {},
+                                                ensure_ascii=False,
+                                            )
+                                            # Always blank in exports; users can rotate token later in Edit.
+                                            xlsx_record["api_token"] = ""
+                                            xlsx_records.append(xlsx_record)
+                                        pd.DataFrame(xlsx_records).to_excel(target_path, index=False)
+                                    else:
+                                        target_path.write_text(
+                                            json.dumps(records, indent=2, ensure_ascii=False),
+                                            encoding="utf-8",
+                                        )
+                                    record_event(
+                                        session,
+                                        "export",
+                                        "endpoint",
+                                        after_value={
+                                            "path": str(target_path),
+                                            "format": export_format,
+                                            "count": len(records),
+                                        },
+                                    )
+                                    session.commit()
+                                    st.success(tr("msg_endpoints_exported", path=target_path))
+                                except Exception as exc:
+                                    st.error(tr("error_endpoint_export_failed", error=exc))
 
     if config_page == "tests":
         with get_session(session_factory) as session:

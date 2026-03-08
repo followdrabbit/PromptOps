@@ -34,7 +34,6 @@ def update_provider(session: Session, provider: models.Provider, data: dict) -> 
         "compliance": provider.compliance,
         "tags": provider.tags,
         "notes": provider.notes,
-        "is_active": provider.is_active,
     }
     for key, value in data.items():
         setattr(provider, key, value)
@@ -53,7 +52,6 @@ def providers_to_records(providers: list[models.Provider]) -> list[dict[str, Any
         {
             "name": provider.name,
             "notes": provider.notes or "",
-            "is_active": bool(provider.is_active),
         }
         for provider in providers
     ]
@@ -64,21 +62,6 @@ def validate_provider_records(records: list[dict[str, Any]]) -> tuple[list[dict[
     errors: list[str] = []
     seen_names: set[str] = set()
 
-    def _to_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return True
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"", "true", "1", "yes", "y", "on"}:
-                return True
-            if lowered in {"false", "0", "no", "n", "off"}:
-                return False
-        raise ValueError(f"invalid boolean value '{value}'")
-
     for row_index, row in enumerate(records, start=1):
         if not isinstance(row, dict):
             errors.append(f"row {row_index}: invalid row format (expected object)")
@@ -86,13 +69,12 @@ def validate_provider_records(records: list[dict[str, Any]]) -> tuple[list[dict[
 
         raw_name = row.get("name")
         raw_notes = row.get("notes")
-        raw_is_active = row.get("is_active")
 
         name = "" if raw_name is None else str(raw_name).strip()
         notes = "" if raw_notes is None else str(raw_notes).strip()
 
         # Ignore fully empty rows from spreadsheets.
-        if not name and not notes and raw_is_active in {None, ""}:
+        if not name and not notes:
             continue
 
         if not name:
@@ -108,13 +90,7 @@ def validate_provider_records(records: list[dict[str, Any]]) -> tuple[list[dict[
             continue
         seen_names.add(key)
 
-        try:
-            is_active = _to_bool(raw_is_active)
-        except ValueError as exc:
-            errors.append(f"row {row_index}: {exc}")
-            continue
-
-        normalized.append({"name": name, "notes": notes or None, "is_active": is_active})
+        normalized.append({"name": name, "notes": notes or None})
 
     if not normalized and not errors:
         errors.append("no valid provider records found")
@@ -136,7 +112,6 @@ def upsert_provider_records(session: Session, records: list[dict[str, Any]]) -> 
         payload = {
             "name": name,
             "notes": record.get("notes"),
-            "is_active": bool(record.get("is_active", True)),
         }
         if name_key in existing_name_keys:
             skipped_existing += 1

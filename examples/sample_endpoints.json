@@ -1,0 +1,51 @@
+[
+  {
+    "name": "OpenAI Responses - GPT 4.1 Mini",
+    "provider": "OpenAI",
+    "endpoint_url": "https://api.openai.com/v1/responses",
+    "model_name": "gpt-4.1-mini",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{API_TOKEN}}"
+    },
+    "body": {
+      "model": "{{MODEL_NAME}}",
+      "input": "{{PROMPT}}",
+      "max_output_tokens": 1000,
+      "temperature": 0.7
+    },
+    "response_paths": "$output[1].content[0].text",
+    "response_type": "json",
+    "additional_variables": {},
+    "api_token": ""
+  },
+  {
+    "name": "Anthropic Messages - Sonnet",
+    "provider": "Anthropic",
+    "endpoint_url": "https://api.anthropic.com/v1/messages",
+    "model_name": "claude-sonnet-4-5",
+    "headers": {
+      "Content-Type": "application/json",
+      "x-api-key": "{{API_TOKEN}}",
+      "anthropic-version": "2023-06-01"
+    },
+    "body": {
+      "model": "{{MODEL_NAME}}",
+      "system": "{{SYSTEM_PROMPT}}",
+      "messages": [
+        {
+          "role": "user",
+          "content": "{{PROMPT}}"
+        }
+      ],
+      "max_tokens": 1000,
+      "temperature": 0.7
+    },
+    "response_paths": "$content[0].text",
+    "response_type": "json",
+    "additional_variables": {
+      "SYSTEM_PROMPT": "You are a helpful assistant."
+    },
+    "api_token": ""
+  }
+]

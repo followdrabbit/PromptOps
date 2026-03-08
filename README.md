@@ -58,3 +58,5 @@ Generated files:
 - `examples/sample_tests.xlsx`
 - `examples/sample_providers.xlsx`
 - `examples/sample_providers.json`
+- `examples/sample_endpoints.xlsx`
+- `examples/sample_endpoints.json`

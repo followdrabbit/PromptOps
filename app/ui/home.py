@@ -128,7 +128,6 @@ def render(context: dict) -> None:
                         tr("table_name"): endpoint.name,
                         tr("table_provider"): endpoint.provider,
                         tr("table_model"): endpoint.model_name,
-                        tr("table_active"): endpoint.is_active,
                     }
                     for endpoint in recent_endpoints
                 ],
