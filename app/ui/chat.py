@@ -214,6 +214,8 @@ def render(context: dict) -> None:
                 renamed = rename_session(session, chat_session, auto_title)
                 st.session_state[pending_rename_key] = renamed.title
             add_message(session, chat_session.id, "user", prompt)
+            with st.chat_message("user"):
+                st.markdown(prompt)
             messages = [{"role": msg.role, "content": msg.content} for msg in history] + [
                 {"role": "user", "content": prompt}
             ]
@@ -224,10 +226,13 @@ def render(context: dict) -> None:
                     variables,
                     verify_ssl=runtime_settings.get("ssl_verify", True),
                 )
-                response = provider.send_prompt(
-                    messages,
-                    {"timeout": int(runtime_settings.get("default_timeout", 30))},
-                )
+                with st.chat_message("assistant"):
+                    with st.spinner(tr("msg_waiting_response")):
+                        response = provider.send_prompt(
+                            messages,
+                            {"timeout": int(runtime_settings.get("default_timeout", 30))},
+                        )
+                    st.markdown(response.content)
                 add_message(
                     session,
                     chat_session.id,
@@ -251,6 +256,8 @@ def render(context: dict) -> None:
                     endpoint.id,
                     endpoint.name,
                 )
+                with st.chat_message("assistant"):
+                    st.error(tr("error_chat_failed", error=exc))
                 add_message(session, chat_session.id, "assistant", f"Error: {exc}")
                 session.commit()
                 st.rerun()

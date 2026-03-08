@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,11 +29,14 @@ from app.services.test_service import (
     validate_columns,
 )
 from app.services.provider_service import (
-    list_providers,
     create_provider,
-    get_provider,
-    update_provider,
     delete_provider,
+    get_provider,
+    list_providers,
+    providers_to_records,
+    update_provider,
+    upsert_provider_records,
+    validate_provider_records,
 )
 from app.ui.utils import get_runtime_settings, parse_json_field
 from app.ui.i18n import get_translator
@@ -66,9 +70,9 @@ def _safe_resolve(path_input: str, base: Path) -> Path:
     return candidate
 
 
-def _sanitize_filename(name: str) -> str:
+def _sanitize_filename(name: str, fallback: str = "import.xlsx") -> str:
     cleaned = "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
-    return cleaned or "import.xlsx"
+    return cleaned or fallback
 
 
 def _split_endpoint_url(url: str) -> tuple[str, str]:
@@ -106,6 +110,28 @@ def _parse_variable_values(raw: str) -> dict[str, str]:
         for key, value in parsed.items()
         if str(key).strip()
     }
+
+
+def _load_provider_records(path: Path) -> list[dict]:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        dataframe = pd.read_excel(path)
+        return dataframe.to_dict(orient="records")
+
+    if suffix == ".json":
+        content = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(content, dict):
+            if isinstance(content.get("providers"), list):
+                content = content["providers"]
+            else:
+                content = [content]
+        if not isinstance(content, list):
+            raise ValueError("invalid_json_root")
+        if not all(isinstance(item, dict) for item in content):
+            raise ValueError("invalid_json_records")
+        return [dict(item) for item in content]
+
+    raise ValueError("unsupported_file_type")
 
 
 def render(context: dict) -> None:
@@ -252,6 +278,16 @@ def render(context: dict) -> None:
 
     if config_page == "providers":
         with get_session(session_factory) as session:
+            provider_import_flash_key = "provider_import_flash_messages"
+            flash_messages = st.session_state.pop(provider_import_flash_key, [])
+            for level, message in flash_messages:
+                if level == "warning":
+                    st.warning(message)
+                elif level == "error":
+                    st.error(message)
+                else:
+                    st.success(message)
+
             st.subheader(tr("section_registered_providers"))
             providers = list_providers(session)
             if providers:
@@ -269,7 +305,7 @@ def render(context: dict) -> None:
             else:
                 st.info(tr("no_providers"))
 
-            provider_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete")])
+            provider_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete"), tr("tab_import_export")])
 
             with provider_tabs[0]:
                 st.subheader(tr("section_create_provider"))
@@ -389,6 +425,174 @@ def render(context: dict) -> None:
                         ):
                             st.session_state.pop(pending_delete_provider_key, None)
                             st.rerun()
+
+            with provider_tabs[3]:
+                st.subheader(tr("section_provider_import_export"))
+                st.info(tr("provider_import_export_tips"))
+
+                settings = get_runtime_settings(session, config)
+                import_base = _safe_resolve(settings["import_dir"], ROOT_DIR)
+                output_base = _safe_resolve(settings["output_dir"], ROOT_DIR)
+                if not is_safe_path(import_base, ROOT_DIR) or not is_safe_path(output_base, ROOT_DIR):
+                    st.error(tr("error_provider_dirs_within_project"))
+                else:
+                    st.caption(tr("label_approved_import_dir", path=import_base))
+                    st.caption(tr("label_approved_output_dir", path=output_base))
+
+                    st.markdown(f"**{tr('section_import_providers')}**")
+                    st.caption(tr("label_provider_supported_formats"))
+
+                    import_source: Path | None = None
+                    uploaded = st.file_uploader(
+                        tr("label_upload_provider_file"),
+                        type=["xlsx", "json"],
+                        key="provider_import_upload",
+                    )
+                    if uploaded:
+                        safe_name = _sanitize_filename(uploaded.name, fallback="providers_import.xlsx")
+                        destination = (import_base / safe_name).resolve()
+                        if not is_safe_path(destination, import_base):
+                            st.error(tr("error_provider_import_path"))
+                        elif destination.suffix.lower() not in {".xlsx", ".json"}:
+                            st.error(tr("error_provider_import_file_type"))
+                        else:
+                            import_base.mkdir(parents=True, exist_ok=True)
+                            destination.write_bytes(uploaded.getbuffer())
+                            import_source = destination
+
+                    if import_source:
+                        try:
+                            raw_records = _load_provider_records(import_source)
+                            normalized_records, validation_errors = validate_provider_records(raw_records)
+                        except (json.JSONDecodeError, ValueError) as exc:
+                            st.error(tr("error_provider_import_parse", error=exc))
+                            raw_records = []
+                            normalized_records = []
+                            validation_errors = []
+                        except Exception as exc:
+                            st.error(tr("error_provider_import_parse", error=exc))
+                            raw_records = []
+                            normalized_records = []
+                            validation_errors = []
+                        else:
+                            st.caption(
+                                tr(
+                                    "label_provider_import_loaded",
+                                    source=import_source.name,
+                                    count=len(raw_records),
+                                )
+                            )
+
+                        if validation_errors:
+                            st.error(tr("error_provider_import_validation"))
+                            for issue in validation_errors:
+                                st.write(f"- {issue}")
+
+                        if normalized_records and not validation_errors:
+                            st.dataframe(normalized_records, width="stretch")
+                            if st.button(tr("button_import_providers"), key="button_import_providers"):
+                                try:
+                                    stats = upsert_provider_records(session, normalized_records)
+                                    record_event(
+                                        session,
+                                        "import",
+                                        "provider",
+                                        after_value={
+                                            "source": import_source.name,
+                                            "format": import_source.suffix.lower().lstrip("."),
+                                            "rows": len(normalized_records),
+                                            "created": stats["created"],
+                                            "skipped_existing": stats["skipped_existing"],
+                                        },
+                                    )
+                                    session.commit()
+                                    messages: list[tuple[str, str]] = []
+                                    if stats["skipped_existing_names"]:
+                                        messages.append(
+                                            (
+                                                "warning",
+                                                tr(
+                                                    "warning_provider_existing_skipped",
+                                                    names=", ".join(stats["skipped_existing_names"]),
+                                                ),
+                                            )
+                                        )
+                                    messages.append(
+                                        (
+                                            "success",
+                                            tr(
+                                                "msg_providers_imported",
+                                                created=stats["created"],
+                                                skipped_existing=stats["skipped_existing"],
+                                            ),
+                                        )
+                                    )
+                                    st.session_state[provider_import_flash_key] = messages
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(tr("error_provider_import_failed", error=exc))
+
+                    st.markdown(f"**{tr('section_export_providers')}**")
+                    if not providers:
+                        st.info(tr("no_providers"))
+                    else:
+                        export_format = st.selectbox(
+                            tr("label_provider_export_format"),
+                            ["xlsx", "json"],
+                            format_func=lambda value: value.upper(),
+                            key="provider_export_format",
+                        )
+                        default_export_name = (
+                            f"providers_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+                        )
+                        export_filename = st.text_input(
+                            tr("label_provider_export_filename"),
+                            value=default_export_name,
+                            key="provider_export_filename",
+                        )
+                        allow_overwrite = st.checkbox(
+                            tr("label_provider_export_overwrite"),
+                            value=False,
+                            key="provider_export_allow_overwrite",
+                        )
+                        if st.button(tr("button_export_providers"), key="button_export_providers"):
+                            safe_filename = _sanitize_filename(
+                                export_filename,
+                                fallback=f"providers_backup.{export_format}",
+                            )
+                            safe_path_name = Path(safe_filename)
+                            if safe_path_name.suffix.lower() != f".{export_format}":
+                                safe_filename = f"{safe_path_name.stem}.{export_format}"
+                            target_path = _safe_resolve(safe_filename, output_base)
+                            if not is_safe_path(target_path, output_base):
+                                st.error(tr("error_provider_export_path"))
+                            elif target_path.exists() and not allow_overwrite:
+                                st.error(tr("error_provider_export_exists"))
+                            else:
+                                try:
+                                    output_base.mkdir(parents=True, exist_ok=True)
+                                    records = providers_to_records(providers)
+                                    if export_format == "xlsx":
+                                        pd.DataFrame(records).to_excel(target_path, index=False)
+                                    else:
+                                        target_path.write_text(
+                                            json.dumps(records, indent=2, ensure_ascii=False),
+                                            encoding="utf-8",
+                                        )
+                                    record_event(
+                                        session,
+                                        "export",
+                                        "provider",
+                                        after_value={
+                                            "path": str(target_path),
+                                            "format": export_format,
+                                            "count": len(records),
+                                        },
+                                    )
+                                    session.commit()
+                                    st.success(tr("msg_providers_exported", path=target_path))
+                                except Exception as exc:
+                                    st.error(tr("error_provider_export_failed", error=exc))
 
     if config_page == "endpoints":
         with get_session(session_factory) as session:

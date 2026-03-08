@@ -1,0 +1,17 @@
+[
+  {
+    "name": "OpenAI",
+    "notes": "Primary provider for GPT models.",
+    "is_active": true
+  },
+  {
+    "name": "Anthropic",
+    "notes": "Provider for Claude model family.",
+    "is_active": true
+  },
+  {
+    "name": "AzureFoundry",
+    "notes": "Internal Azure AI Foundry integration.",
+    "is_active": false
+  }
+]

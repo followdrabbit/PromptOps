@@ -48,8 +48,13 @@ Local runtime data is stored under `data/` and ignored by git. This includes:
 - Imports and exports
 
 ## Example Test Suite
-An example XLSX can be generated in `examples/` by running:
+Example files can be generated in `examples/` by running:
 
 ```bash
 python examples/generate_sample_xlsx.py
 ```
+
+Generated files:
+- `examples/sample_tests.xlsx`
+- `examples/sample_providers.xlsx`
+- `examples/sample_providers.json`

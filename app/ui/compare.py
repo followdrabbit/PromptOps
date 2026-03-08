@@ -250,9 +250,16 @@ def render(context: dict) -> None:
                 st.warning(tr("warning_compare_select_endpoint"))
                 return
 
+            with st.chat_message("user"):
+                st.markdown(user_prompt)
+
             compare_results: list[dict] = []
-            progress = st.progress(0)
             total = len(selected_ids)
+            st.markdown(f"**{tr('compare_results_title')}**")
+            progress_caption = st.empty()
+            progress_caption.caption(tr("msg_compare_in_progress", done=0, total=total))
+            results_placeholder = st.empty()
+            progress = st.progress(0)
             for index, endpoint_id in enumerate(selected_ids, start=1):
                 endpoint = endpoint_by_id[endpoint_id]
                 history = endpoint_histories.get(str(endpoint_id), [])
@@ -311,9 +318,13 @@ def render(context: dict) -> None:
                             "error": str(exc),
                         }
                     )
+                with results_placeholder.container():
+                    _render_response_cards(compare_results, tr)
+                progress_caption.caption(tr("msg_compare_in_progress", done=index, total=total))
                 progress.progress(int((index / total) * 100))
 
             progress.empty()
+            progress_caption.empty()
             compare_turns.append({"prompt": user_prompt, "responses": compare_results})
             st.session_state[COMPARE_TURNS_KEY] = compare_turns
             st.session_state[COMPARE_HISTORY_KEY] = endpoint_histories
