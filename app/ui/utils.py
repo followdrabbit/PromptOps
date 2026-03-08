@@ -51,15 +51,20 @@ def apply_global_styles() -> None:
         """
         <style>
         .block-container {
-            padding-top: 1.8rem;
+            padding-top: 3.4rem;
             padding-bottom: 2.5rem;
             max-width: 1200px;
+        }
+
+        [data-testid="stSidebar"] .block-container {
+            padding-top: 3.2rem;
         }
 
         .topbar-title {
             font-size: 1.35rem;
             font-weight: 700;
-            margin: 0;
+            margin: 0 0 2px 0;
+            line-height: 1.25;
             color: var(--text-color);
         }
 
@@ -67,7 +72,8 @@ def apply_global_styles() -> None:
             color: var(--text-color);
             opacity: 0.7;
             font-size: 0.9rem;
-            margin-top: 2px;
+            margin-top: 0;
+            line-height: 1.35;
         }
 
         .page-intro {

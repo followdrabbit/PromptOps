@@ -14,6 +14,22 @@ from app.services.audit_service import record_event
 REQUIRED_COLUMNS = ["test_name", "prompt"]
 
 
+def _validate_suite_fields(name: str, source_type: str, source_path: str | None) -> tuple[str, str, str | None]:
+    normalized_name = (name or "").strip()
+    if not normalized_name:
+        raise ValueError("suite_name_required")
+
+    normalized_source_type = (source_type or "").strip().lower()
+    if normalized_source_type not in {"file", "directory"}:
+        raise ValueError("source_type_required")
+
+    normalized_source_path = (source_path or "").strip() or None
+    if normalized_source_type == "directory" and not normalized_source_path:
+        raise ValueError("source_path_required")
+
+    return normalized_name, normalized_source_type, normalized_source_path
+
+
 def create_suite(
     session: Session,
     name: str,
@@ -22,17 +38,82 @@ def create_suite(
     source_path: str | None = None,
     default_endpoint_id: int | None = None,
 ) -> models.TestSuite:
+    normalized_name, normalized_source_type, normalized_source_path = _validate_suite_fields(
+        name,
+        source_type,
+        source_path,
+    )
+
     suite = models.TestSuite(
-        name=name,
-        description=description,
-        source_type=source_type,
-        source_path=source_path,
+        name=normalized_name,
+        description=(description or "").strip() or None,
+        source_type=normalized_source_type,
+        source_path=normalized_source_path,
         default_endpoint_id=default_endpoint_id,
     )
     session.add(suite)
     session.flush()
-    record_event(session, "create", "test_suite", suite.id, after_value={"name": name})
+    record_event(session, "create", "test_suite", suite.id, after_value={"name": normalized_name})
     return suite
+
+
+def update_suite(
+    session: Session,
+    suite: models.TestSuite,
+    name: str,
+    description: str | None,
+    source_type: str,
+    source_path: str | None = None,
+    default_endpoint_id: int | None = None,
+    is_active: bool = True,
+) -> models.TestSuite:
+    normalized_name, normalized_source_type, normalized_source_path = _validate_suite_fields(
+        name,
+        source_type,
+        source_path,
+    )
+    before = {
+        "name": suite.name,
+        "description": suite.description,
+        "source_type": suite.source_type,
+        "source_path": suite.source_path,
+        "default_endpoint_id": suite.default_endpoint_id,
+        "is_active": suite.is_active,
+    }
+    suite.name = normalized_name
+    suite.description = (description or "").strip() or None
+    suite.source_type = normalized_source_type
+    suite.source_path = normalized_source_path
+    suite.default_endpoint_id = default_endpoint_id
+    suite.is_active = bool(is_active)
+    session.add(suite)
+    record_event(
+        session,
+        "update",
+        "test_suite",
+        suite.id,
+        before_value=before,
+        after_value={
+            "name": suite.name,
+            "description": suite.description,
+            "source_type": suite.source_type,
+            "source_path": suite.source_path,
+            "default_endpoint_id": suite.default_endpoint_id,
+            "is_active": suite.is_active,
+        },
+    )
+    return suite
+
+
+def delete_suite(session: Session, suite: models.TestSuite) -> None:
+    record_event(
+        session,
+        "delete",
+        "test_suite",
+        suite.id,
+        before_value={"name": suite.name},
+    )
+    session.delete(suite)
 
 
 def import_tests_from_dataframe(
