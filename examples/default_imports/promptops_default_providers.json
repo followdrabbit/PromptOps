@@ -1,0 +1,18 @@
+[
+  {
+    "name": "OpenAI",
+    "notes": "Default provider for OpenAI-compatible endpoints."
+  },
+  {
+    "name": "Anthropic",
+    "notes": "Default provider for Anthropic Messages API."
+  },
+  {
+    "name": "Google Gemini",
+    "notes": "Default provider for Gemini REST endpoints."
+  },
+  {
+    "name": "Azure Foundry",
+    "notes": "Default provider for Azure AI Foundry endpoints."
+  }
+]

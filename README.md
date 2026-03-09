@@ -37,6 +37,11 @@ streamlit run app/main.py
 ## Configuration
 Default settings live in `config.toml`. Runtime overrides are stored in the `settings` table and managed from the UI.
 
+Automated Tests module settings (in `Configuration > Automated Test Settings`) include:
+- parallel thread count (`tests_max_threads`)
+- request timeout (`tests_request_timeout`)
+- default result export format (`tests_result_format`: `xlsx` or `json`)
+
 ## Documentation
 - `docs/ARCHITECTURE.md`
 - `docs/SECURITY.md`
@@ -56,7 +61,32 @@ python examples/generate_sample_xlsx.py
 
 Generated files:
 - `examples/sample_tests.xlsx`
+- `examples/sample_tests.json`
 - `examples/sample_providers.xlsx`
 - `examples/sample_providers.json`
 - `examples/sample_endpoints.xlsx`
 - `examples/sample_endpoints.json`
+
+`sample_tests.*` uses the suite import/export format:
+- `Suite Name` (required)
+- `Suite Description` (optional)
+- `Prompt` (required)
+- `Notes` (optional)
+
+## Default Import Files
+Default baseline files for quick import are available in `examples/default_imports/`.
+The test suite template buttons in the UI use `promptops_default_test_suites.*` as the default example source.
+
+To regenerate:
+
+```bash
+python examples/generate_default_import_files.py
+```
+
+Generated default files:
+- `examples/default_imports/promptops_default_providers.xlsx`
+- `examples/default_imports/promptops_default_providers.json`
+- `examples/default_imports/promptops_default_endpoints.xlsx`
+- `examples/default_imports/promptops_default_endpoints.json`
+- `examples/default_imports/promptops_default_test_suites.xlsx`
+- `examples/default_imports/promptops_default_test_suites.json`

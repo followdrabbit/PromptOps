@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from html import escape as html_escape
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,12 +31,18 @@ from app.services.endpoint_service import (
 )
 from app.services.settings_service import set_setting
 from app.services.test_service import (
+    create_suite_prompt,
     create_suite,
+    delete_suite_prompt,
     delete_suite,
+    import_suite_records,
     import_tests_from_dataframe,
-    scan_directory,
+    list_suite_test_cases,
+    load_suite_records_from_file,
+    suites_to_records,
+    update_suite_prompt,
     update_suite,
-    validate_columns,
+    validate_suite_import_records,
 )
 from app.services.provider_service import (
     create_provider,
@@ -51,18 +58,22 @@ from app.ui.utils import get_runtime_settings, parse_json_field
 from app.ui.i18n import get_translator
 
 
-TEST_FIELDS = [
-    "order",
-    "enabled",
-    "test_name",
-    "prompt",
-    "expected_result",
-    "validation_type",
-    "tags",
-    "temperature",
-    "max_tokens",
-    "notes",
+TEST_PROMPT_COLUMN = "prompt"
+TEST_NOTES_COLUMN = "notes"
+TEST_IMPORT_COLUMNS = [TEST_PROMPT_COLUMN, TEST_NOTES_COLUMN]
+TEST_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_test_suites_template.xlsx"
+TEST_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_test_suites_template.json"
+PROVIDER_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_provider_template.xlsx"
+PROVIDER_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_provider_template.json"
+ENDPOINT_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_endpoint_template.xlsx"
+ENDPOINT_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_endpoint_template.json"
+TEST_TEMPLATE_XLSX_PATHS = [
+    "examples/default_imports/promptops_default_test_suites.xlsx",
 ]
+TEST_TEMPLATE_JSON_PATHS = [
+    "examples/default_imports/promptops_default_test_suites.json",
+]
+DEFAULT_IMPORT_FILES_DIR = (ROOT_DIR / "examples" / "default_imports").resolve()
 
 RESERVED_TEMPLATE_VARS = {"API_TOKEN", "MODEL_NAME", "PROMPT"}
 TEMPLATE_VAR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -173,6 +184,103 @@ def _load_template_bytes(relative_path: str) -> bytes | None:
         return template_path.read_bytes()
     except OSError:
         return None
+
+
+def _normalize_test_prompt_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    lowered_columns = {str(column).strip().lower(): column for column in df.columns}
+    prompt_column = lowered_columns.get(TEST_PROMPT_COLUMN)
+    notes_column = lowered_columns.get(TEST_NOTES_COLUMN)
+    if prompt_column is None:
+        raise ValueError("missing_prompt_column")
+
+    normalized = pd.DataFrame(
+        {
+            TEST_PROMPT_COLUMN: df[prompt_column],
+            TEST_NOTES_COLUMN: df[notes_column] if notes_column is not None else None,
+        }
+    )
+    return normalized
+
+
+def _load_test_prompt_dataframe(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        return _normalize_test_prompt_dataframe(pd.read_excel(path))
+
+    if suffix == ".json":
+        content = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(content, dict):
+            if isinstance(content.get("tests"), list):
+                content = content["tests"]
+            elif isinstance(content.get("prompts"), list):
+                content = content["prompts"]
+            else:
+                content = [content]
+        if not isinstance(content, list):
+            raise ValueError("invalid_json_root")
+        if not all(isinstance(item, dict) for item in content):
+            raise ValueError("invalid_json_records")
+        return _normalize_test_prompt_dataframe(pd.DataFrame(content))
+
+    raise ValueError("unsupported_file_type")
+
+
+def _scan_test_prompt_files(directory: Path, import_base: Path) -> list[Path]:
+    if not is_safe_path(directory, import_base):
+        raise ValueError("directory_outside_import_base")
+    if not directory.exists():
+        raise ValueError("directory_missing")
+    files = [path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in {".xlsx", ".json"}]
+    return sorted(files)
+
+
+def _build_prompt_import_mapping(df: pd.DataFrame) -> dict[str, str | None]:
+    mapping: dict[str, str | None] = {field: None for field in TEST_IMPORT_COLUMNS}
+    for field in TEST_IMPORT_COLUMNS:
+        if field in df.columns:
+            mapping[field] = field
+    return mapping
+
+
+def _render_test_template_downloads(tr, key_prefix: str) -> None:
+    st.markdown(f"**{tr('section_templates')}**")
+    test_template_xlsx = None
+    for candidate in TEST_TEMPLATE_XLSX_PATHS:
+        test_template_xlsx = _load_template_bytes(candidate)
+        if test_template_xlsx is not None:
+            break
+
+    test_template_json = None
+    for candidate in TEST_TEMPLATE_JSON_PATHS:
+        test_template_json = _load_template_bytes(candidate)
+        if test_template_json is not None:
+            break
+    template_cols = st.columns(2, gap="small")
+    template_cols[0].download_button(
+        tr("button_download_test_template_xlsx"),
+        data=test_template_xlsx or b"",
+        file_name=TEST_TEMPLATE_XLSX_DOWNLOAD_NAME,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"{key_prefix}_download_test_template_xlsx",
+        disabled=test_template_xlsx is None,
+        width="stretch",
+    )
+    template_cols[1].download_button(
+        tr("button_download_test_template_json"),
+        data=test_template_json or b"",
+        file_name=TEST_TEMPLATE_JSON_DOWNLOAD_NAME,
+        mime="application/json",
+        key=f"{key_prefix}_download_test_template_json",
+        disabled=test_template_json is None,
+        width="stretch",
+    )
+    if test_template_xlsx is None or test_template_json is None:
+        st.warning(tr("warning_template_files_missing"))
+
+
+def _render_default_import_files_hint(tr) -> None:
+    if DEFAULT_IMPORT_FILES_DIR.exists() and DEFAULT_IMPORT_FILES_DIR.is_dir():
+        st.caption(tr("label_default_import_files_dir", path=DEFAULT_IMPORT_FILES_DIR))
 
 
 def render(context: dict) -> None:
@@ -478,6 +586,7 @@ def render(context: dict) -> None:
                 else:
                     st.caption(tr("label_approved_import_dir", path=import_base))
                     st.caption(tr("label_approved_output_dir", path=output_base))
+                    _render_default_import_files_hint(tr)
                     st.markdown(f"**{tr('section_templates')}**")
                     provider_template_xlsx = _load_template_bytes("examples/sample_providers.xlsx")
                     provider_template_json = _load_template_bytes("examples/sample_providers.json")
@@ -485,7 +594,7 @@ def render(context: dict) -> None:
                     template_cols[0].download_button(
                         tr("button_download_provider_template_xlsx"),
                         data=provider_template_xlsx or b"",
-                        file_name="sample_providers.xlsx",
+                        file_name=PROVIDER_TEMPLATE_XLSX_DOWNLOAD_NAME,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="download_provider_template_xlsx",
                         disabled=provider_template_xlsx is None,
@@ -494,7 +603,7 @@ def render(context: dict) -> None:
                     template_cols[1].download_button(
                         tr("button_download_provider_template_json"),
                         data=provider_template_json or b"",
-                        file_name="sample_providers.json",
+                        file_name=PROVIDER_TEMPLATE_JSON_DOWNLOAD_NAME,
                         mime="application/json",
                         key="download_provider_template_json",
                         disabled=provider_template_json is None,
@@ -1113,6 +1222,7 @@ def render(context: dict) -> None:
                 else:
                     st.caption(tr("label_approved_import_dir", path=import_base))
                     st.caption(tr("label_approved_output_dir", path=output_base))
+                    _render_default_import_files_hint(tr)
                     st.markdown(f"**{tr('section_templates')}**")
                     endpoint_template_xlsx = _load_template_bytes("examples/sample_endpoints.xlsx")
                     endpoint_template_json = _load_template_bytes("examples/sample_endpoints.json")
@@ -1120,7 +1230,7 @@ def render(context: dict) -> None:
                     template_cols[0].download_button(
                         tr("button_download_endpoint_template_xlsx"),
                         data=endpoint_template_xlsx or b"",
-                        file_name="sample_endpoints.xlsx",
+                        file_name=ENDPOINT_TEMPLATE_XLSX_DOWNLOAD_NAME,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="download_endpoint_template_xlsx",
                         disabled=endpoint_template_xlsx is None,
@@ -1129,7 +1239,7 @@ def render(context: dict) -> None:
                     template_cols[1].download_button(
                         tr("button_download_endpoint_template_json"),
                         data=endpoint_template_json or b"",
-                        file_name="sample_endpoints.json",
+                        file_name=ENDPOINT_TEMPLATE_JSON_DOWNLOAD_NAME,
                         mime="application/json",
                         key="download_endpoint_template_json",
                         disabled=endpoint_template_json is None,
@@ -1339,47 +1449,89 @@ def render(context: dict) -> None:
 
     if config_page == "tests":
         with get_session(session_factory) as session:
-            st.subheader(tr("section_test_suites"))
             suites = session.query(models.TestSuite).order_by(models.TestSuite.created_at.desc()).all()
-            endpoints = list_endpoints(session)
-            if suites:
-                st.dataframe(
-                    [
-                        {
-                            tr("table_id"): suite.id,
-                            tr("table_name"): suite.name,
-                            tr("table_source"): suite.source_type,
-                            tr("table_active"): suite.is_active,
-                        }
-                        for suite in suites
-                    ],
-                    width="stretch",
+            settings = get_runtime_settings(session, config)
+
+            st.subheader(tr("section_test_module_settings"))
+            current_tests_threads = max(1, int(settings.get("tests_max_threads", 1)))
+            current_tests_timeout = max(5, int(settings.get("tests_request_timeout", settings["default_timeout"])))
+            with st.form("test_module_settings"):
+                tests_max_threads = st.number_input(
+                    tr("label_tests_max_threads"),
+                    min_value=1,
+                    max_value=32,
+                    value=current_tests_threads,
+                    step=1,
+                    help=tr("help_tests_max_threads"),
                 )
+                tests_request_timeout = st.number_input(
+                    tr("label_tests_request_timeout"),
+                    min_value=5,
+                    max_value=600,
+                    value=current_tests_timeout,
+                    step=1,
+                    help=tr("help_tests_request_timeout"),
+                )
+                tests_result_format = st.selectbox(
+                    tr("label_tests_result_format"),
+                    options=["xlsx", "json"],
+                    index=0 if settings.get("tests_result_format", "xlsx") == "xlsx" else 1,
+                    format_func=lambda value: value.upper(),
+                    help=tr("help_tests_result_format"),
+                )
+                save_test_module_settings = st.form_submit_button(tr("button_save_test_module_settings"))
+                if save_test_module_settings:
+                    set_setting(session, "tests_max_threads", str(int(tests_max_threads)))
+                    set_setting(session, "tests_request_timeout", str(int(tests_request_timeout)))
+                    set_setting(session, "tests_result_format", tests_result_format)
+                    record_event(
+                        session,
+                        "update",
+                        "settings",
+                        "tests_module",
+                        after_value={
+                            "tests_max_threads": int(tests_max_threads),
+                            "tests_request_timeout": int(tests_request_timeout),
+                            "tests_result_format": tests_result_format,
+                        },
+                    )
+                    session.commit()
+                    st.success(tr("msg_test_module_settings_saved"))
+                    st.rerun()
+
+            st.subheader(tr("section_test_suites"))
+            if suites:
+                st.caption(tr("label_registered_suites_count", count=len(suites)))
+                for row_start in range(0, len(suites), 3):
+                    row_cols = st.columns(3, gap="small")
+                    for col_index in range(3):
+                        suite_index = row_start + col_index
+                        if suite_index >= len(suites):
+                            continue
+                        with row_cols[col_index]:
+                            suite_name = suites[suite_index].name or "-"
+                            escaped_name = html_escape(suite_name)
+                            st.markdown(
+                                f'<div class="suite-chip" title="{escaped_name}">{escaped_name}</div>',
+                                unsafe_allow_html=True,
+                            )
             else:
                 st.info(tr("no_test_suites"))
 
-            suite_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete")])
+            suite_tabs = st.tabs([tr("tab_create"), tr("tab_edit"), tr("tab_delete"), tr("tab_import_export")])
 
             with suite_tabs[0]:
                 st.subheader(tr("section_create_suite"))
+                st.info(tr("suite_create_upload_tips"))
+                _render_test_template_downloads(tr, "suite_create")
                 with st.form("create_suite"):
                     suite_name = st.text_input(tr("label_suite_name"))
                     suite_description = st.text_area(tr("label_description"))
-                    source_type = st.selectbox(
-                        tr("label_source_type"),
-                        ["", "file", "directory"],
-                        format_func=lambda val: tr("option_select")
-                        if not val
-                        else (tr("source_file") if val == "file" else tr("source_directory")),
-                    )
-                    source_path = st.text_input(tr("label_source_path"), value="")
-                    default_endpoint_options = [None] + [ep.id for ep in endpoints]
-                    default_endpoint = st.selectbox(
-                        tr("label_default_endpoint"),
-                        options=default_endpoint_options,
-                        format_func=lambda ep_id: tr("option_none")
-                        if ep_id is None
-                        else next((ep.name for ep in endpoints if ep.id == ep_id), tr("label_unknown")),
+                    uploaded_suite_files = st.file_uploader(
+                        tr("label_suite_source_files"),
+                        type=["xlsx", "json"],
+                        accept_multiple_files=True,
+                        key="create_suite_source_files",
                     )
                     create = st.form_submit_button(tr("button_create_suite"))
                     if create:
@@ -1387,30 +1539,105 @@ def render(context: dict) -> None:
                             required_fields: list[str] = []
                             if not suite_name.strip():
                                 required_fields.append(tr("label_suite_name"))
-                            if not source_type:
-                                required_fields.append(tr("label_source_type"))
                             if required_fields:
                                 st.error(tr("error_required_fields", fields=", ".join(required_fields)))
+                            elif not uploaded_suite_files:
+                                st.error(tr("error_suite_files_required"))
                             else:
+                                import_base = _safe_resolve(settings["import_dir"], ROOT_DIR)
+                                if not is_safe_path(import_base, ROOT_DIR):
+                                    st.error(tr("error_test_dirs_within_project"))
+                                    return
+
+                                import_base.mkdir(parents=True, exist_ok=True)
+                                valid_dataframes: list[tuple[str, pd.DataFrame]] = []
+                                skipped_reasons: list[str] = []
+                                stored_file_names: list[str] = []
+
+                                for file_index, uploaded_file in enumerate(uploaded_suite_files, start=1):
+                                    suffix = Path(uploaded_file.name).suffix.lower()
+                                    fallback_suffix = ".json" if suffix == ".json" else ".xlsx"
+                                    if suffix not in {".xlsx", ".json"}:
+                                        skipped_reasons.append(
+                                            tr("error_suite_file_type", file=uploaded_file.name)
+                                        )
+                                        continue
+                                    safe_name = _sanitize_filename(
+                                        uploaded_file.name,
+                                        fallback=f"suite_file_{file_index}{fallback_suffix}",
+                                    )
+                                    destination = (import_base / safe_name).resolve()
+                                    if not is_safe_path(destination, import_base):
+                                        skipped_reasons.append(
+                                            tr("error_suite_file_path", file=uploaded_file.name)
+                                        )
+                                        continue
+                                    try:
+                                        destination.write_bytes(uploaded_file.getbuffer())
+                                        df = _load_test_prompt_dataframe(destination)
+                                    except ValueError as exc:
+                                        reason = str(exc)
+                                        if reason == "missing_prompt_column":
+                                            skipped_reasons.append(
+                                                tr("error_suite_file_missing_columns", file=uploaded_file.name)
+                                            )
+                                        else:
+                                            skipped_reasons.append(
+                                                tr("error_suite_file_read", file=uploaded_file.name, error=exc)
+                                            )
+                                    except Exception as exc:
+                                        skipped_reasons.append(
+                                            tr("error_suite_file_read", file=uploaded_file.name, error=exc)
+                                        )
+                                        continue
+                                    else:
+                                        valid_dataframes.append((uploaded_file.name, df))
+                                        stored_file_names.append(safe_name)
+
+                                if not valid_dataframes:
+                                    st.error(tr("error_suite_no_valid_files"))
+                                    for reason in skipped_reasons:
+                                        st.write(f"- {reason}")
+                                    return
+
                                 suite = create_suite(
                                     session,
                                     suite_name,
                                     suite_description,
-                                    source_type,
-                                    source_path or None,
-                                    default_endpoint,
+                                    "file",
+                                    ", ".join(stored_file_names)[:255] if stored_file_names else None,
+                                    None,
                                 )
+                                imported_total = 0
+                                for _, dataframe in valid_dataframes:
+                                    mapping = _build_prompt_import_mapping(dataframe)
+                                    imported_total += import_tests_from_dataframe(session, suite, dataframe, mapping)
+
+                                if imported_total == 0:
+                                    session.rollback()
+                                    st.error(tr("error_suite_no_valid_tests"))
+                                    for reason in skipped_reasons:
+                                        st.write(f"- {reason}")
+                                    return
+
                                 session.commit()
-                                st.success(tr("msg_suite_created", name=suite.name))
+                                st.success(
+                                    tr(
+                                        "msg_suite_created_with_import",
+                                        name=suite.name,
+                                        files=len(valid_dataframes),
+                                        count=imported_total,
+                                    )
+                                )
+                                if skipped_reasons:
+                                    st.warning(tr("warning_suite_files_skipped"))
+                                    for reason in skipped_reasons:
+                                        st.write(f"- {reason}")
                                 st.rerun()
                         except ValueError as exc:
                             reason = str(exc)
                             if reason == "suite_name_required":
                                 st.error(tr("error_suite_name_required"))
-                            elif reason == "source_type_required":
-                                st.error(tr("error_source_type_required"))
-                            elif reason == "source_path_required":
-                                st.error(tr("error_suite_source_path_required"))
                             else:
                                 st.error(tr("error_failed_create_suite", error=exc))
                         except Exception as exc:
@@ -1435,35 +1662,11 @@ def render(context: dict) -> None:
                         edit_suite = next((suite for suite in suites if suite.id == edit_suite_id), None)
 
                         if edit_suite:
-                            default_endpoint_options = [None] + [ep.id for ep in endpoints]
-                            current_default_endpoint = (
-                                edit_suite.default_endpoint_id
-                                if edit_suite.default_endpoint_id in default_endpoint_options
-                                else None
-                            )
                             with st.form("edit_suite"):
                                 edit_name = st.text_input(tr("label_suite_name"), value=edit_suite.name)
                                 edit_description = st.text_area(
                                     tr("label_description"),
                                     value=edit_suite.description or "",
-                                )
-                                edit_source_type = st.selectbox(
-                                    tr("label_source_type"),
-                                    ["file", "directory"],
-                                    index=0 if edit_suite.source_type == "file" else 1,
-                                    format_func=lambda val: tr("source_file") if val == "file" else tr("source_directory"),
-                                )
-                                edit_source_path = st.text_input(
-                                    tr("label_source_path"),
-                                    value=edit_suite.source_path or "",
-                                )
-                                edit_default_endpoint = st.selectbox(
-                                    tr("label_default_endpoint"),
-                                    options=default_endpoint_options,
-                                    index=default_endpoint_options.index(current_default_endpoint),
-                                    format_func=lambda ep_id: tr("option_none")
-                                    if ep_id is None
-                                    else next((ep.name for ep in endpoints if ep.id == ep_id), tr("label_unknown")),
                                 )
                                 edit_is_active = st.checkbox(
                                     tr("label_active"),
@@ -1478,9 +1681,9 @@ def render(context: dict) -> None:
                                             edit_suite,
                                             edit_name,
                                             edit_description,
-                                            edit_source_type,
-                                            edit_source_path or None,
-                                            edit_default_endpoint,
+                                            edit_suite.source_type or "file",
+                                            edit_suite.source_path,
+                                            edit_suite.default_endpoint_id,
                                             is_active=edit_is_active,
                                         )
                                         session.commit()
@@ -1498,6 +1701,149 @@ def render(context: dict) -> None:
                                             st.error(tr("error_failed_update_suite", error=exc))
                                     except Exception as exc:
                                         st.error(tr("error_failed_update_suite", error=exc))
+
+                            st.markdown(f"**{tr('section_suite_prompts')}**")
+                            prompt_cases = list_suite_test_cases(session, edit_suite)
+                            if prompt_cases:
+                                st.dataframe(
+                                    [
+                                        {
+                                            tr("table_id"): test_case.id,
+                                            tr("label_prompt_text"): test_case.prompt,
+                                            tr("label_prompt_notes"): test_case.notes or "",
+                                        }
+                                        for test_case in prompt_cases
+                                    ],
+                                    width="stretch",
+                                )
+                            else:
+                                st.info(tr("no_suite_prompts"))
+
+                            prompt_tabs = st.tabs(
+                                [tr("tab_add_prompt"), tr("tab_edit_prompt"), tr("tab_delete_prompt")]
+                            )
+
+                            with prompt_tabs[0]:
+                                with st.form(f"add_suite_prompt_form_{edit_suite.id}"):
+                                    new_prompt = st.text_area(tr("label_prompt_text"), value="")
+                                    new_notes = st.text_area(tr("label_prompt_notes"), value="")
+                                    add_prompt_submit = st.form_submit_button(tr("button_add_prompt"))
+                                    if add_prompt_submit:
+                                        try:
+                                            create_suite_prompt(session, edit_suite, new_prompt, new_notes)
+                                            session.commit()
+                                            st.success(tr("msg_prompt_added"))
+                                            st.rerun()
+                                        except ValueError as exc:
+                                            if str(exc) == "prompt_required":
+                                                st.error(tr("error_prompt_required"))
+                                            else:
+                                                st.error(tr("error_prompt_save_failed", error=exc))
+                                        except Exception as exc:
+                                            st.error(tr("error_prompt_save_failed", error=exc))
+
+                            with prompt_tabs[1]:
+                                if not prompt_cases:
+                                    st.info(tr("no_suite_prompts"))
+                                else:
+                                    edit_prompt_id = st.selectbox(
+                                        tr("label_select_prompt_to_edit"),
+                                        options=[None] + [test_case.id for test_case in prompt_cases],
+                                        format_func=lambda prompt_id: tr("option_select")
+                                        if prompt_id is None
+                                        else (
+                                            f"#{prompt_id} - "
+                                            + next(
+                                                tc.prompt.replace("\n", " ")[:80]
+                                                + ("..." if len(tc.prompt or "") > 80 else "")
+                                                for tc in prompt_cases
+                                                if tc.id == prompt_id
+                                            )
+                                        ),
+                                        key=f"edit_suite_prompt_select_{edit_suite.id}",
+                                    )
+                                    if edit_prompt_id is None:
+                                        st.info(tr("info_select_item_to_edit"))
+                                    else:
+                                        edit_prompt_case = next(
+                                            (tc for tc in prompt_cases if tc.id == edit_prompt_id),
+                                            None,
+                                        )
+                                        if edit_prompt_case:
+                                            with st.form(
+                                                f"edit_suite_prompt_form_{edit_suite.id}_{edit_prompt_case.id}"
+                                            ):
+                                                updated_prompt = st.text_area(
+                                                    tr("label_prompt_text"),
+                                                    value=edit_prompt_case.prompt or "",
+                                                )
+                                                updated_notes = st.text_area(
+                                                    tr("label_prompt_notes"),
+                                                    value=edit_prompt_case.notes or "",
+                                                )
+                                                update_prompt_submit = st.form_submit_button(
+                                                    tr("button_update_prompt")
+                                                )
+                                                if update_prompt_submit:
+                                                    try:
+                                                        update_suite_prompt(
+                                                            session,
+                                                            edit_prompt_case,
+                                                            updated_prompt,
+                                                            updated_notes,
+                                                        )
+                                                        session.commit()
+                                                        st.success(tr("msg_prompt_updated"))
+                                                        st.rerun()
+                                                    except ValueError as exc:
+                                                        if str(exc) == "prompt_required":
+                                                            st.error(tr("error_prompt_required"))
+                                                        else:
+                                                            st.error(tr("error_prompt_save_failed", error=exc))
+                                                    except Exception as exc:
+                                                        st.error(tr("error_prompt_save_failed", error=exc))
+
+                            with prompt_tabs[2]:
+                                if not prompt_cases:
+                                    st.info(tr("no_suite_prompts"))
+                                else:
+                                    delete_prompt_id = st.selectbox(
+                                        tr("label_select_prompt_to_delete"),
+                                        options=[test_case.id for test_case in prompt_cases],
+                                        format_func=lambda prompt_id: (
+                                            f"#{prompt_id} - "
+                                            + next(
+                                                tc.prompt.replace("\n", " ")[:80]
+                                                + ("..." if len(tc.prompt or "") > 80 else "")
+                                                for tc in prompt_cases
+                                                if tc.id == prompt_id
+                                            )
+                                        ),
+                                        key=f"delete_suite_prompt_select_{edit_suite.id}",
+                                    )
+                                    prompt_to_delete = next(
+                                        (tc for tc in prompt_cases if tc.id == delete_prompt_id),
+                                        None,
+                                    )
+                                    if prompt_to_delete:
+                                        confirm_delete_prompt = st.checkbox(
+                                            tr("label_confirm_delete_prompt"),
+                                            key=f"confirm_delete_prompt_{edit_suite.id}_{prompt_to_delete.id}",
+                                        )
+                                        if st.button(
+                                            tr("button_delete_prompt"),
+                                            key=f"delete_prompt_button_{edit_suite.id}_{prompt_to_delete.id}",
+                                        ):
+                                            if not confirm_delete_prompt:
+                                                st.warning(tr("warning_confirm_delete_prompt"))
+                                            else:
+                                                try:
+                                                    delete_suite_prompt(session, prompt_to_delete)
+                                                    session.commit()
+                                                    st.success(tr("msg_prompt_deleted"))
+                                                    st.rerun()
+                                                except Exception as exc:
+                                                    st.error(tr("error_prompt_delete_failed", error=exc))
 
             with suite_tabs[2]:
                 st.subheader(tr("section_delete_suite"))
@@ -1547,71 +1893,218 @@ def render(context: dict) -> None:
                                 st.session_state.pop(pending_delete_suite_key, None)
                                 st.rerun()
 
-            st.subheader(tr("section_import_tests"))
-            if not suites:
-                st.info(tr("info_create_suite_first"))
-                return
+            with suite_tabs[3]:
+                st.subheader(tr("section_test_import_export"))
+                st.info(tr("suite_import_export_tips"))
 
-            selected_suite_id = st.selectbox(
-                tr("label_select_suite"),
-                options=[suite.id for suite in suites],
-                format_func=lambda s_id: next(suite.name for suite in suites if suite.id == s_id),
-            )
-            selected_suite = next(suite for suite in suites if suite.id == selected_suite_id)
+                settings = get_runtime_settings(session, config)
+                import_base = _safe_resolve(settings["import_dir"], ROOT_DIR)
+                output_base = _safe_resolve(settings["output_dir"], ROOT_DIR)
+                if not is_safe_path(import_base, ROOT_DIR) or not is_safe_path(output_base, ROOT_DIR):
+                    st.error(tr("error_test_dirs_within_project"))
+                else:
+                    st.caption(tr("label_approved_import_dir", path=import_base))
+                    st.caption(tr("label_approved_output_dir", path=output_base))
+                    _render_default_import_files_hint(tr)
+                    _render_test_template_downloads(tr, "test_import_export")
 
-            settings = get_runtime_settings(session, config)
-            import_base = (ROOT_DIR / settings["import_dir"]).resolve()
-            st.caption(tr("label_approved_import_dir", path=import_base))
+                    st.markdown(f"**{tr('section_import_suites')}**")
+                    import_mode = st.radio(
+                        tr("label_import_mode"),
+                        ["upload", "directory"],
+                        format_func=lambda val: tr("option_upload_file")
+                        if val == "upload"
+                        else tr("option_use_directory"),
+                        key="suite_import_mode",
+                    )
+                    source_path: Path | None = None
+                    raw_suite_records: list[dict] | None = None
 
-            import_mode = st.radio(
-                tr("label_import_mode"),
-                ["upload", "directory"],
-                format_func=lambda val: tr("option_upload_file") if val == "upload" else tr("option_use_directory"),
-            )
-            df = None
-            source_path = None
+                    if import_mode == "upload":
+                        uploaded = st.file_uploader(
+                            tr("label_upload_test_file"),
+                            type=["xlsx", "json"],
+                            key="suite_import_upload_file",
+                        )
+                        if uploaded:
+                            suffix = Path(uploaded.name).suffix.lower()
+                            fallback_suffix = ".json" if suffix == ".json" else ".xlsx"
+                            if suffix not in {".xlsx", ".json"}:
+                                st.error(tr("error_test_import_file_type"))
+                            else:
+                                safe_name = _sanitize_filename(
+                                    uploaded.name,
+                                    fallback=f"suites_import{fallback_suffix}",
+                                )
+                                destination = (import_base / safe_name).resolve()
+                                if not is_safe_path(destination, import_base):
+                                    st.error(tr("error_test_import_path"))
+                                else:
+                                    import_base.mkdir(parents=True, exist_ok=True)
+                                    destination.write_bytes(uploaded.getbuffer())
+                                    source_path = destination
+                                    try:
+                                        raw_suite_records = load_suite_records_from_file(destination)
+                                    except Exception as exc:
+                                        st.error(tr("error_test_import_parse", error=exc))
+                    else:
+                        directory_input = st.text_input(
+                            tr("label_directory_relative"),
+                            value="",
+                            key="suite_import_directory_relative",
+                        )
+                        if directory_input:
+                            directory = _safe_resolve(directory_input, import_base)
+                            try:
+                                files = _scan_test_prompt_files(directory, import_base)
+                                if not files:
+                                    st.warning(tr("warning_no_test_files"))
+                                else:
+                                    file_choice = st.selectbox(
+                                        tr("label_select_file"),
+                                        options=files,
+                                        key="suite_import_select_file",
+                                    )
+                                    source_path = file_choice
+                                    try:
+                                        raw_suite_records = load_suite_records_from_file(file_choice)
+                                    except Exception as exc:
+                                        st.error(tr("error_test_import_parse", error=exc))
+                            except ValueError as exc:
+                                reason = str(exc)
+                                if reason == "directory_outside_import_base":
+                                    st.error(tr("error_test_import_directory_path"))
+                                elif reason == "directory_missing":
+                                    st.error(tr("error_test_import_directory_missing"))
+                                else:
+                                    st.error(tr("error_failed_scan_directory", error=exc))
+                            except Exception as exc:
+                                st.error(tr("error_failed_scan_directory", error=exc))
 
-            if import_mode == "upload":
-                uploaded = st.file_uploader(tr("label_upload_xlsx"), type=["xlsx"])
-                if uploaded:
-                    import_base.mkdir(parents=True, exist_ok=True)
-                    destination = import_base / _sanitize_filename(uploaded.name)
-                    destination.write_bytes(uploaded.getbuffer())
-                    source_path = destination
-                    df = pd.read_excel(destination)
-            else:
-                directory_input = st.text_input(tr("label_directory_relative"), value="")
-                if directory_input:
-                    directory = _safe_resolve(directory_input, import_base)
-                    try:
-                        files = scan_directory(directory, import_base)
-                        if not files:
-                            st.warning(tr("warning_no_xlsx_files"))
+                    if raw_suite_records is not None:
+                        source_label = source_path.name if source_path else tr("source_upload")
+                        normalized_suite_records, validation_errors = validate_suite_import_records(raw_suite_records)
+                        if validation_errors:
+                            st.warning(tr("warning_suite_import_validation_issues"))
+                            for issue in validation_errors:
+                                st.write(f"- {issue}")
+
+                        if normalized_suite_records:
+                            preview_df = pd.DataFrame(normalized_suite_records)
+                            st.success(tr("msg_loaded_rows", count=len(normalized_suite_records), source=source_label))
+                            st.dataframe(preview_df.fillna(""), width="stretch")
+                            if st.button(tr("button_import_suites"), key="button_import_suites"):
+                                try:
+                                    import_summary = import_suite_records(session, normalized_suite_records)
+                                    session.commit()
+                                    st.success(
+                                        tr(
+                                            "msg_suites_imported",
+                                            created=import_summary["created_suites"],
+                                            tests=import_summary["imported_tests"],
+                                            skipped_existing=import_summary["skipped_existing"],
+                                        )
+                                    )
+                                    skipped_names = import_summary.get("skipped_existing_names") or []
+                                    if skipped_names:
+                                        st.warning(
+                                            tr(
+                                                "warning_suite_existing_skipped",
+                                                names=", ".join(skipped_names),
+                                            )
+                                        )
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(tr("error_import_failed", error=exc))
                         else:
-                            file_choice = st.selectbox(tr("label_select_file"), options=files)
-                            source_path = file_choice
-                            df = pd.read_excel(file_choice)
-                    except Exception as exc:
-                        st.error(tr("error_failed_scan_directory", error=exc))
+                            st.error(tr("error_suite_no_valid_files"))
 
-            if df is not None:
-                source_label = source_path.name if source_path else tr("source_upload")
-                st.success(tr("msg_loaded_rows", count=len(df), source=source_label))
-                missing = validate_columns(df, required=["test_name", "prompt"])
-                if missing:
-                    st.warning(tr("warning_missing_columns", columns=", ".join(missing)))
+                    st.markdown(f"**{tr('section_export_suites')}**")
+                    if not suites:
+                        st.info(tr("info_create_suite_first"))
+                    else:
+                        export_scope = st.selectbox(
+                            tr("label_suite_export_scope"),
+                            options=["all"] + [suite.id for suite in suites],
+                            format_func=lambda value: tr("option_all_suites")
+                            if value == "all"
+                            else next(suite.name for suite in suites if suite.id == value),
+                            key="suite_export_scope",
+                        )
+                        suites_for_export = (
+                            suites
+                            if export_scope == "all"
+                            else [next(suite for suite in suites if suite.id == export_scope)]
+                        )
+                        suite_records = suites_to_records(session, suites_for_export)
+                        st.caption(
+                            tr(
+                                "label_suites_for_export_count",
+                                suites=len(suites_for_export),
+                                tests=len(suite_records),
+                            )
+                        )
 
-                with st.form("column_mapping"):
-                    mapping = {}
-                    for field in TEST_FIELDS:
-                        options = ["(skip)"] + list(df.columns)
-                        default = df.columns.get_loc(field) + 1 if field in df.columns else 0
-                        selection = st.selectbox(tr("label_map_column", field=field), options, index=default)
-                        mapping[field] = None if selection == "(skip)" else selection
-                    import_now = st.form_submit_button(tr("button_import_tests"))
-                    if import_now:
-                        try:
-                            imported = import_tests_from_dataframe(session, selected_suite, df, mapping)
-                            st.success(tr("msg_imported_tests", count=imported))
-                        except Exception as exc:
-                            st.error(tr("error_import_failed", error=exc))
+                        export_format = st.selectbox(
+                            tr("label_test_export_format"),
+                            ["xlsx", "json"],
+                            format_func=lambda value: value.upper(),
+                            key="suite_export_format",
+                        )
+                        scope_name = "all_suites" if export_scope == "all" else f"suite_{export_scope}"
+                        default_export_name = (
+                            f"{scope_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+                        )
+                        export_filename = st.text_input(
+                            tr("label_test_export_filename"),
+                            value=default_export_name,
+                            key="suite_export_filename",
+                        )
+                        allow_overwrite = st.checkbox(
+                            tr("label_test_export_overwrite"),
+                            value=False,
+                            key="suite_export_allow_overwrite",
+                        )
+
+                        if st.button(tr("button_export_suites"), key="button_export_suites"):
+                            if not suite_records:
+                                st.warning(tr("warning_no_suite_records_to_export"))
+                            else:
+                                safe_filename = _sanitize_filename(
+                                    export_filename,
+                                    fallback=f"{scope_name}.{export_format}",
+                                )
+                                safe_path_name = Path(safe_filename)
+                                if safe_path_name.suffix.lower() != f".{export_format}":
+                                    safe_filename = f"{safe_path_name.stem}.{export_format}"
+                                target_path = _safe_resolve(safe_filename, output_base)
+                                if not is_safe_path(target_path, output_base):
+                                    st.error(tr("error_test_export_path"))
+                                elif target_path.exists() and not allow_overwrite:
+                                    st.error(tr("error_test_export_exists"))
+                                else:
+                                    try:
+                                        output_base.mkdir(parents=True, exist_ok=True)
+                                        if export_format == "xlsx":
+                                            pd.DataFrame(suite_records).to_excel(target_path, index=False)
+                                        else:
+                                            target_path.write_text(
+                                                json.dumps(suite_records, indent=2, ensure_ascii=False),
+                                                encoding="utf-8",
+                                            )
+                                        record_event(
+                                            session,
+                                            "export",
+                                            "test_suites",
+                                            str(export_scope),
+                                            after_value={
+                                                "path": str(target_path),
+                                                "format": export_format,
+                                                "suites": len(suites_for_export),
+                                                "tests": len(suite_records),
+                                            },
+                                        )
+                                        session.commit()
+                                        st.success(tr("msg_suites_exported", path=target_path))
+                                    except Exception as exc:
+                                        st.error(tr("error_test_export_failed", error=exc))

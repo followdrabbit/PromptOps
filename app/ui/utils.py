@@ -22,21 +22,51 @@ SETTINGS_KEYS = {
     "secure_storage": "secure_storage",
     "audit_verbosity": "audit_verbosity",
     "ssl_verify": "ssl_verify",
+    "tests_max_threads": "tests_max_threads",
+    "tests_request_timeout": "tests_request_timeout",
+    "tests_result_format": "tests_result_format",
 }
 
 
+def _to_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def get_runtime_settings(session: Session, config: AppConfig) -> dict[str, Any]:
+    tests_result_format = (
+        get_setting(session, "tests_result_format", config.tests_result_format).strip().lower()
+    )
+    if tests_result_format not in {"xlsx", "json"}:
+        tests_result_format = "xlsx"
     return {
         "language": get_setting(session, "language", config.language),
         "log_level": get_setting(session, "log_level", config.log_level),
-        "default_timeout": int(get_setting(session, "default_timeout", str(config.default_timeout))),
+        "default_timeout": _to_int(
+            get_setting(session, "default_timeout", str(config.default_timeout)),
+            config.default_timeout,
+        ),
         "output_dir": get_setting(session, "output_dir", config.output_dir),
         "import_dir": get_setting(session, "import_dir", config.import_dir),
         "tools_enabled": get_setting(session, "tools_enabled", str(config.tools_enabled)).lower() == "true",
-        "log_retention_days": int(get_setting(session, "log_retention_days", str(config.log_retention_days))),
+        "log_retention_days": _to_int(
+            get_setting(session, "log_retention_days", str(config.log_retention_days)),
+            config.log_retention_days,
+        ),
         "secure_storage": get_setting(session, "secure_storage", config.secure_storage),
         "audit_verbosity": get_setting(session, "audit_verbosity", config.audit_verbosity),
         "ssl_verify": get_setting(session, "ssl_verify", str(config.ssl_verify)).lower() == "true",
+        "tests_max_threads": _to_int(
+            get_setting(session, "tests_max_threads", str(config.tests_max_threads)),
+            config.tests_max_threads,
+        ),
+        "tests_request_timeout": _to_int(
+            get_setting(session, "tests_request_timeout", str(config.tests_request_timeout)),
+            config.tests_request_timeout,
+        ),
+        "tests_result_format": tests_result_format,
     }
 
 
@@ -201,6 +231,25 @@ def apply_global_styles() -> None:
             font-weight: 600;
             margin: 12px 0 8px 0;
             color: var(--text-color);
+        }
+
+        .suite-chip {
+            background: var(--secondary-background-color);
+            border: 1px solid rgba(127, 127, 127, 0.35);
+            border-radius: 14px;
+            padding: 12px 14px;
+            min-height: 52px;
+            color: var(--text-color);
+            font-size: 0.95rem;
+            font-weight: 600;
+            line-height: 1.3;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+
+        .suite-chip:hover {
+            border-color: var(--primary-color);
         }
         </style>
         """,

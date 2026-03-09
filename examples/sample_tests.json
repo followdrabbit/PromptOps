@@ -1,0 +1,20 @@
+[
+  {
+    "Suite Name": "Smoke Suite",
+    "Suite Description": "Basic health-check prompts.",
+    "Prompt": "Say hello in one sentence.",
+    "Notes": "Basic greeting"
+  },
+  {
+    "Suite Name": "Smoke Suite",
+    "Suite Description": "Basic health-check prompts.",
+    "Prompt": "Summarize: PromptOps manages AI endpoints and tests.",
+    "Notes": ""
+  },
+  {
+    "Suite Name": "PT-BR Suite",
+    "Suite Description": "Portuguese prompts for quick checks.",
+    "Prompt": "Explique em duas frases o que e PromptOps.",
+    "Notes": "Idioma portugues"
+  }
+]

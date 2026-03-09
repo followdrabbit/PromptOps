@@ -24,6 +24,9 @@ class AppConfig:
     tools_enabled: bool = True
     secure_storage: str = "fernet"
     ssl_verify: bool = True
+    tests_max_threads: int = 1
+    tests_request_timeout: int = 30
+    tests_result_format: str = "xlsx"
 
     @property
     def output_path(self) -> Path:
@@ -53,6 +56,10 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     app = raw.get("app", {})
+    tests_result_format = str(app.get("tests_result_format", "xlsx")).lower()
+    if tests_result_format not in {"xlsx", "json"}:
+        tests_result_format = "xlsx"
+
     return AppConfig(
         name=app.get("name", "PromptOps"),
         language=app.get("language", "en"),
@@ -68,6 +75,9 @@ def load_config(path: Path | None = None) -> AppConfig:
         tools_enabled=bool(app.get("tools_enabled", True)),
         secure_storage=app.get("secure_storage", "fernet"),
         ssl_verify=bool(app.get("ssl_verify", True)),
+        tests_max_threads=int(app.get("tests_max_threads", 1)),
+        tests_request_timeout=int(app.get("tests_request_timeout", 30)),
+        tests_result_format=tests_result_format,
     )
 
 
