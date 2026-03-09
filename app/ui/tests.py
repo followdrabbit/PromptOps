@@ -17,6 +17,7 @@ from app.ui.i18n import get_translator
 
 
 SUITE_TOGGLE_KEY_PREFIX = "automated_tests_suite_toggle_"
+SUITE_TOGGLE_ALL_KEY = "automated_tests_suite_toggle_all"
 
 
 def _normalize_result_format(value: str | None) -> str:
@@ -39,12 +40,51 @@ def _build_result_filename(endpoint_name: str, suite_name: str, extension: str) 
     return f"{endpoint_part}_{suite_part}_{timestamp}.{extension}"
 
 
+def _suite_toggle_key(suite_id: int) -> str:
+    return f"{SUITE_TOGGLE_KEY_PREFIX}{suite_id}"
+
+
+def _on_toggle_all_suites_change(suite_ids: list[int]) -> None:
+    enabled = bool(st.session_state.get(SUITE_TOGGLE_ALL_KEY, False))
+    for suite_id in suite_ids:
+        st.session_state[_suite_toggle_key(suite_id)] = enabled
+
+
+def _on_suite_toggle_change(suite_ids: list[int]) -> None:
+    if not suite_ids:
+        st.session_state[SUITE_TOGGLE_ALL_KEY] = False
+        return
+    st.session_state[SUITE_TOGGLE_ALL_KEY] = all(
+        bool(st.session_state.get(_suite_toggle_key(suite_id), False))
+        for suite_id in suite_ids
+    )
+
+
 def _render_suite_toggle_grid(suites: list[models.TestSuite], tr) -> list[models.TestSuite]:
     st.markdown(f"**{tr('label_test_suites')}**")
-    for suite in suites:
-        toggle_key = f"{SUITE_TOGGLE_KEY_PREFIX}{suite.id}"
+    suite_ids = [suite.id for suite in suites]
+    for suite_id in suite_ids:
+        toggle_key = _suite_toggle_key(suite_id)
         if toggle_key not in st.session_state:
             st.session_state[toggle_key] = False
+
+    all_enabled = bool(suite_ids) and all(
+        bool(st.session_state.get(_suite_toggle_key(suite_id), False))
+        for suite_id in suite_ids
+    )
+    st.session_state[SUITE_TOGGLE_ALL_KEY] = all_enabled
+
+    with st.container(border=True):
+        master_cols = st.columns([0.8, 0.2], gap="small")
+        master_cols[0].markdown(f"**{tr('label_all_suites')}**")
+        master_cols[1].toggle(
+            tr("label_enable_all_suites"),
+            key=SUITE_TOGGLE_ALL_KEY,
+            help=tr("help_enable_all_suites"),
+            label_visibility="collapsed",
+            on_change=_on_toggle_all_suites_change,
+            args=(suite_ids,),
+        )
 
     for row_start in range(0, len(suites), 3):
         row_cols = st.columns(3, gap="small")
@@ -53,7 +93,7 @@ def _render_suite_toggle_grid(suites: list[models.TestSuite], tr) -> list[models
             if suite_index >= len(suites):
                 continue
             suite = suites[suite_index]
-            toggle_key = f"{SUITE_TOGGLE_KEY_PREFIX}{suite.id}"
+            toggle_key = _suite_toggle_key(suite.id)
             with row_cols[col_index]:
                 with st.container(border=True):
                     suite_cols = st.columns([0.8, 0.2], gap="small")
@@ -63,12 +103,14 @@ def _render_suite_toggle_grid(suites: list[models.TestSuite], tr) -> list[models
                         key=toggle_key,
                         help=tr("help_enable_suite", name=suite.name),
                         label_visibility="collapsed",
+                        on_change=_on_suite_toggle_change,
+                        args=(suite_ids,),
                     )
 
     selected_suites = [
         suite
         for suite in suites
-        if st.session_state.get(f"{SUITE_TOGGLE_KEY_PREFIX}{suite.id}", False)
+        if st.session_state.get(_suite_toggle_key(suite.id), False)
     ]
     st.caption(tr("label_selected_suites_count", count=len(selected_suites)))
     return selected_suites
