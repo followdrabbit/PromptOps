@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
 from app.core.paths import ROOT_DIR
+from app.core.secrets import SecretManager
 from app.core.security import is_safe_path
 from app.domain import models
 from app.infra.db import get_session
@@ -12,12 +14,15 @@ from app.jobs.test_runner import run_test_suite
 from app.services.endpoint_service import list_endpoints
 from app.services.test_service import export_run_results
 from app.services.audit_service import record_event
+from app.ui.endpoint_variables import render_runtime_variable_editor
+from app.ui.file_actions import open_file_in_default_app
 from app.ui.utils import get_runtime_settings
 from app.ui.i18n import get_translator
 
 
 SUITE_TOGGLE_KEY_PREFIX = "automated_tests_suite_toggle_"
 SUITE_TOGGLE_ALL_KEY = "automated_tests_suite_toggle_all"
+GENERATED_RESULTS_KEY = "automated_tests_generated_result_files"
 
 
 def _normalize_result_format(value: str | None) -> str:
@@ -37,7 +42,7 @@ def _build_result_filename(endpoint_name: str, suite_name: str, extension: str) 
     endpoint_part = _sanitize_filename_segment(endpoint_name, "endpoint")
     suite_part = _sanitize_filename_segment(suite_name, "suite")
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-    return f"{endpoint_part}_{suite_part}_{timestamp}.{extension}"
+    return f"automated_tests_{endpoint_part}_{suite_part}_{timestamp}.{extension}"
 
 
 def _suite_toggle_key(suite_id: int) -> str:
@@ -142,9 +147,12 @@ def render(context: dict) -> None:
     )
 
     with get_session(session_factory) as session:
+        if GENERATED_RESULTS_KEY not in st.session_state:
+            st.session_state[GENERATED_RESULTS_KEY] = []
         runtime_settings = get_runtime_settings(session, config)
         tests_timeout = max(5, int(runtime_settings.get("tests_request_timeout", runtime_settings.get("default_timeout", 30))))
         tests_max_threads = max(1, int(runtime_settings.get("tests_max_threads", 1)))
+        tests_retries = max(0, int(runtime_settings.get("tests_retries", 0)))
         default_result_format = _normalize_result_format(runtime_settings.get("tests_result_format", "xlsx"))
         suites = session.query(models.TestSuite).order_by(models.TestSuite.created_at.desc()).all()
         endpoints = list_endpoints(session)
@@ -163,6 +171,18 @@ def render(context: dict) -> None:
             format_func=lambda ep_id: next(ep.name for ep in endpoints if ep.id == ep_id),
         )
         endpoint = next(ep for ep in endpoints if ep.id == endpoint_id)
+        secret_manager = SecretManager()
+        endpoint_variables = secret_manager.get_variables(session, endpoint.id)
+        endpoint_variable_types = secret_manager.get_variable_types(session, endpoint.id)
+        with st.expander(tr("section_runtime_additional_variables"), expanded=False):
+            runtime_variable_overrides = render_runtime_variable_editor(
+                tr,
+                endpoint_name=endpoint.name,
+                endpoint_id=endpoint.id,
+                variables=endpoint_variables,
+                variable_types=endpoint_variable_types,
+                key_prefix="tests_runtime_var",
+            )
 
         tests_by_suite: dict[int, list[models.TestCase]] = {}
         prompts_to_validate = 0
@@ -182,6 +202,7 @@ def render(context: dict) -> None:
                 "label_test_execution_profile",
                 threads=tests_max_threads,
                 timeout=tests_timeout,
+                retries=tests_retries,
                 format=default_result_format.upper(),
             )
         )
@@ -228,6 +249,8 @@ def render(context: dict) -> None:
                         tests,
                         default_timeout=tests_timeout,
                         max_threads=tests_max_threads,
+                        max_retries=tests_retries,
+                        runtime_variable_overrides=runtime_variable_overrides,
                         verify_ssl=runtime_settings.get("ssl_verify", True),
                         progress_callback=update_progress,
                     )
@@ -251,6 +274,12 @@ def render(context: dict) -> None:
                                 "source": "auto_after_run",
                             },
                         )
+                        recent_paths = [str(auto_path)] + [
+                            path
+                            for path in st.session_state.get(GENERATED_RESULTS_KEY, [])
+                            if str(path) != str(auto_path)
+                        ]
+                        st.session_state[GENERATED_RESULTS_KEY] = recent_paths[:20]
                         st.success(tr("msg_test_results_auto_exported", path=auto_path))
                 except Exception as exc:
                     suite_errors.append(f"{suite.name}: {exc}")
@@ -262,3 +291,23 @@ def render(context: dict) -> None:
                 st.success(tr("msg_test_runs_completed_total", count=completed_runs))
             if suite_errors:
                 st.warning(tr("warning_suites_failed_count", count=len(suite_errors)))
+
+        generated_files = st.session_state.get(GENERATED_RESULTS_KEY, [])
+        if generated_files:
+            st.markdown(f"**{tr('section_generated_result_files')}**")
+            for index, path_text in enumerate(generated_files):
+                file_path = Path(path_text)
+                row_cols = st.columns([0.78, 0.22], gap="small")
+                row_cols[0].caption(str(file_path))
+                if row_cols[1].button(
+                    tr("button_open_generated_file"),
+                    key=f"open_generated_test_file_{index}_{file_path.name}",
+                    width="stretch",
+                ):
+                    try:
+                        open_file_in_default_app(file_path)
+                        st.success(tr("msg_open_generated_file", path=file_path))
+                    except FileNotFoundError:
+                        st.error(tr("error_generated_file_not_found", path=file_path))
+                    except Exception as exc:
+                        st.error(tr("error_open_generated_file", path=file_path, error=exc))

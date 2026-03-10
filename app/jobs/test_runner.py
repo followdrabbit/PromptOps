@@ -21,10 +21,11 @@ logger = get_logger("promptops.test_runner")
 def _execute_test_case(
     provider_class: type,
     endpoint_config: Any,
-    variables: dict[str, str],
+    variables: dict[str, Any],
     verify_ssl: bool,
     test_spec: dict[str, Any],
     default_timeout: int | None,
+    max_retries: int,
 ) -> dict[str, Any]:
     start = time.time()
     status = "passed"
@@ -35,25 +36,38 @@ def _execute_test_case(
         test_spec["test_id"],
         test_spec["test_name"],
     )
-    try:
-        provider = provider_class(endpoint_config, variables, verify_ssl=verify_ssl)
-        params: dict[str, Any] = {}
-        if test_spec.get("temperature") is not None:
-            params["temperature"] = test_spec["temperature"]
-        if test_spec.get("max_tokens") is not None:
-            params["max_tokens"] = test_spec["max_tokens"]
-        if default_timeout is not None:
-            params["timeout"] = int(default_timeout)
-        payload = [{"role": "user", "content": test_spec["prompt"]}]
-        response = provider.send_prompt(payload, params)
-        response_text = response.content
-    except Exception as exc:
-        logger.exception("Test execution failed for %s", test_spec["test_name"])
-        status = "error"
-        error_message = str(exc)
-    else:
-        if not response_text:
-            status = "failed"
+    params: dict[str, Any] = {}
+    if test_spec.get("temperature") is not None:
+        params["temperature"] = test_spec["temperature"]
+    if test_spec.get("max_tokens") is not None:
+        params["max_tokens"] = test_spec["max_tokens"]
+    if default_timeout is not None:
+        params["timeout"] = int(default_timeout)
+    payload = [{"role": "user", "content": test_spec["prompt"]}]
+
+    for attempt in range(max_retries + 1):
+        try:
+            provider = provider_class(endpoint_config, variables, verify_ssl=verify_ssl)
+            response = provider.send_prompt(payload, params)
+            response_text = response.content
+            if not response_text:
+                status = "failed"
+            break
+        except Exception as exc:
+            if attempt < max_retries:
+                logger.warning(
+                    "Test execution failed, retrying test_id=%s attempt=%s/%s error=%s",
+                    test_spec["test_id"],
+                    attempt + 2,
+                    max_retries + 1,
+                    exc,
+                )
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            logger.exception("Test execution failed for %s", test_spec["test_name"])
+            status = "error"
+            error_message = str(exc)
+            break
 
     latency = int((time.time() - start) * 1000)
     return {
@@ -73,6 +87,8 @@ def run_test_suite(
     tests: list[models.TestCase],
     default_timeout: int | None = None,
     max_threads: int = 1,
+    max_retries: int = 0,
+    runtime_variable_overrides: dict[str, Any] | None = None,
     verify_ssl: bool = True,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> models.TestRun:
@@ -97,6 +113,8 @@ def run_test_suite(
     )
 
     variables = SecretManager().get_variables(session, endpoint.id)
+    if runtime_variable_overrides:
+        variables.update({str(key): value for key, value in runtime_variable_overrides.items()})
     provider_class = get_provider_class(endpoint.provider)
     endpoint_config = SimpleNamespace(
         name=endpoint.name,
@@ -115,11 +133,13 @@ def run_test_suite(
         response_type=endpoint.response_type,
     )
     worker_count = max(1, int(max_threads or 1))
+    retry_count = max(0, int(max_retries or 0))
     logger.debug(
-        "Test run execution settings run_id=%s timeout=%s max_threads=%s verify_ssl=%s",
+        "Test run execution settings run_id=%s timeout=%s max_threads=%s max_retries=%s verify_ssl=%s",
         run.id,
         default_timeout,
         worker_count,
+        retry_count,
         verify_ssl,
     )
 
@@ -147,6 +167,7 @@ def run_test_suite(
                     verify_ssl,
                     test_spec,
                     default_timeout,
+                    retry_count,
                 )
             )
     else:
@@ -161,6 +182,7 @@ def run_test_suite(
                     verify_ssl,
                     test_spec,
                     default_timeout,
+                    retry_count,
                 )
                 for test_spec in test_specs
             ]

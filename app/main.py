@@ -12,7 +12,7 @@ import streamlit as st
 from app.core.config import ensure_directories, load_config
 from app.core.logging import set_log_level, setup_logging
 from app.infra.db import build_engine, build_session_factory, get_session, init_db
-from app.ui import chat, compare, config as config_ui, home, tests
+from app.ui import chat, compare, config as config_ui, home, red_teaming, tests
 from app.ui.utils import apply_global_styles, get_runtime_settings
 from app.ui.i18n import get_translator
 
@@ -28,8 +28,9 @@ def bootstrap():
 
 
 def main() -> None:
-    st.set_page_config(page_title="PromptOps", layout="wide")
     config, session_factory = bootstrap()
+    brand_name = config.name or "CyberPrompt AI"
+    st.set_page_config(page_title=brand_name, layout="wide")
     context = {"config": config, "session_factory": session_factory}
 
     apply_global_styles()
@@ -44,20 +45,21 @@ def main() -> None:
     with topbar:
         st.markdown(
             f"""
-            <div class="topbar-title">PromptOps</div>
+            <div class="topbar-title">{brand_name}</div>
             <div class="topbar-subtitle">{tr("topbar_subtitle")}</div>
             """,
             unsafe_allow_html=True,
         )
 
-    st.sidebar.title("PromptOps")
-    nav_options = ["Home", "Configuration", "Chat", "Compare", "Automated Tests"]
+    st.sidebar.title(brand_name)
+    nav_options = ["Home", "Configuration", "Chat", "Compare", "Automated Tests", "Red Teaming"]
     nav_labels = {
         "Home": tr("nav_home"),
         "Configuration": tr("nav_configuration"),
         "Chat": tr("nav_chat"),
         "Compare": tr("nav_compare"),
         "Automated Tests": tr("nav_tests"),
+        "Red Teaming": tr("nav_red_teaming"),
     }
     if "nav" not in st.session_state:
         st.session_state["nav"] = "Home"
@@ -87,6 +89,8 @@ def main() -> None:
         compare.render(context)
     elif selection == "Automated Tests":
         tests.render(context)
+    elif selection == "Red Teaming":
+        red_teaming.render(context)
 
 
 if __name__ == "__main__":

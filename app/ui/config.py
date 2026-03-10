@@ -54,6 +54,7 @@ from app.services.provider_service import (
     upsert_provider_records,
     validate_provider_records,
 )
+from app.ui import red_team_config
 from app.ui.utils import get_runtime_settings, parse_json_field
 from app.ui.i18n import get_translator
 
@@ -61,21 +62,22 @@ from app.ui.i18n import get_translator
 TEST_PROMPT_COLUMN = "prompt"
 TEST_NOTES_COLUMN = "notes"
 TEST_IMPORT_COLUMNS = [TEST_PROMPT_COLUMN, TEST_NOTES_COLUMN]
-TEST_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_test_suites_template.xlsx"
-TEST_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_test_suites_template.json"
-PROVIDER_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_provider_template.xlsx"
-PROVIDER_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_provider_template.json"
-ENDPOINT_TEMPLATE_XLSX_DOWNLOAD_NAME = "promptops_endpoint_template.xlsx"
-ENDPOINT_TEMPLATE_JSON_DOWNLOAD_NAME = "promptops_endpoint_template.json"
+TEST_TEMPLATE_XLSX_DOWNLOAD_NAME = "cyberprompt_ai_test_suites_template.xlsx"
+TEST_TEMPLATE_JSON_DOWNLOAD_NAME = "cyberprompt_ai_test_suites_template.json"
+PROVIDER_TEMPLATE_XLSX_DOWNLOAD_NAME = "cyberprompt_ai_provider_template.xlsx"
+PROVIDER_TEMPLATE_JSON_DOWNLOAD_NAME = "cyberprompt_ai_provider_template.json"
+ENDPOINT_TEMPLATE_XLSX_DOWNLOAD_NAME = "cyberprompt_ai_endpoint_template.xlsx"
+ENDPOINT_TEMPLATE_JSON_DOWNLOAD_NAME = "cyberprompt_ai_endpoint_template.json"
 TEST_TEMPLATE_XLSX_PATHS = [
-    "examples/default_imports/promptops_default_test_suites.xlsx",
+    "examples/default_imports/cyberprompt_ai_default_test_suites.xlsx",
 ]
 TEST_TEMPLATE_JSON_PATHS = [
-    "examples/default_imports/promptops_default_test_suites.json",
+    "examples/default_imports/cyberprompt_ai_default_test_suites.json",
 ]
 DEFAULT_IMPORT_FILES_DIR = (ROOT_DIR / "examples" / "default_imports").resolve()
 
 RESERVED_TEMPLATE_VARS = {"API_TOKEN", "MODEL_NAME", "PROMPT"}
+SUPPORTED_VARIABLE_TYPES = {"string", "number", "boolean", "json"}
 TEMPLATE_VAR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 TEMPLATE_VAR_PATTERNS = (
     re.compile(r"\{\{\s*(" + TEMPLATE_VAR_NAME + r")\s*\}\}"),
@@ -83,6 +85,21 @@ TEMPLATE_VAR_PATTERNS = (
     re.compile(r"<(" + TEMPLATE_VAR_NAME + r")>"),
 )
 BARE_RESERVED_PATTERN = re.compile(r"\b(API_TOKEN|MODEL_NAME|PROMPT)\b")
+ADDITIONAL_VARIABLES_EXAMPLE_DATA = {
+    "REASONING": {
+        "value": {"effort": "medium"},
+        "type": "json",
+    },
+    "TEMPERATURE": {
+        "value": 0.7,
+        "type": "number",
+    },
+}
+ADDITIONAL_VARIABLES_EXAMPLE_JSON = json.dumps(
+    ADDITIONAL_VARIABLES_EXAMPLE_DATA,
+    indent=2,
+    ensure_ascii=False,
+)
 
 
 def _safe_resolve(path_input: str, base: Path) -> Path:
@@ -117,18 +134,108 @@ def _extract_template_variables(*texts: str) -> list[str]:
     return sorted(variables)
 
 
-def _parse_variable_values(raw: str) -> dict[str, str]:
+def _normalize_variable_type(value: str | None) -> str:
+    normalized = str(value or "string").strip().lower()
+    if normalized not in SUPPORTED_VARIABLE_TYPES:
+        raise ValueError("variables_type_invalid")
+    return normalized
+
+
+def _infer_variable_type(value: object) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, (dict, list)):
+        return "json"
+    return "string"
+
+
+def _coerce_number(value: object) -> int | float:
+    if isinstance(value, bool):
+        raise ValueError("variables_number_invalid")
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            raise ValueError("variables_number_invalid")
+        if "." in raw:
+            return float(raw)
+        return int(raw)
+    raise ValueError("variables_number_invalid")
+
+
+def _coerce_boolean(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError("variables_boolean_invalid")
+
+
+def _coerce_json(value: object) -> object:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        return json.loads(raw)
+    return value
+
+
+def _coerce_variable_value(value: object, variable_type: str) -> object:
+    if variable_type == "string":
+        return "" if value is None else str(value)
+    if variable_type == "number":
+        return _coerce_number(value)
+    if variable_type == "boolean":
+        return _coerce_boolean(value)
+    if variable_type == "json":
+        return _coerce_json(value)
+    raise ValueError("variables_type_invalid")
+
+
+def _parse_variable_values(raw: str) -> tuple[dict[str, object], dict[str, str]]:
     if not raw.strip():
-        return {}
+        return {}, {}
     parsed = parse_json_field(raw)
     if parsed is None:
-        return {}
+        return {}, {}
     if not isinstance(parsed, dict):
         raise ValueError("variables_json_type")
+    values: dict[str, object] = {}
+    variable_types: dict[str, str] = {}
+    for key, entry in parsed.items():
+        variable_name = str(key).strip()
+        if not variable_name:
+            continue
+        if isinstance(entry, dict) and ("value" in entry or "type" in entry):
+            variable_type = _normalize_variable_type(str(entry.get("type", "string")))
+            variable_value = _coerce_variable_value(entry.get("value"), variable_type)
+        else:
+            variable_type = _infer_variable_type(entry)
+            variable_value = _coerce_variable_value(entry, variable_type)
+        values[variable_name] = variable_value
+        variable_types[variable_name] = variable_type
+    return values, variable_types
+
+
+def _serialize_variable_definitions(
+    values: dict[str, object],
+    variable_types: dict[str, str],
+) -> dict[str, dict[str, object]]:
     return {
-        str(key).strip(): "" if value is None else str(value)
-        for key, value in parsed.items()
-        if str(key).strip()
+        key: {
+            "value": values.get(key),
+            "type": variable_types.get(key, _infer_variable_type(values.get(key))),
+        }
+        for key in sorted(values.keys())
     }
 
 
@@ -296,6 +403,7 @@ def render(context: dict) -> None:
         "providers": tr("tab_provider_settings"),
         "endpoints": tr("tab_endpoint_settings"),
         "tests": tr("tab_test_settings"),
+        "red_teaming": tr("tab_red_team_settings"),
     }
     config_section_key = "config_section_nav"
     if st.session_state.get(config_section_key) not in config_sections:
@@ -329,6 +437,11 @@ def render(context: dict) -> None:
             tr("config_tests_badge"),
             tr("config_tests_title"),
             tr("config_tests_subtitle"),
+        ),
+        "red_teaming": (
+            tr("config_red_team_badge"),
+            tr("config_red_team_title"),
+            tr("config_red_team_subtitle"),
         ),
     }
     badge, title, subtitle = config_intro.get(config_page, config_intro["general"])
@@ -808,6 +921,8 @@ def render(context: dict) -> None:
                 if not provider_names:
                     st.info(tr("no_providers"))
                 st.info(tr("endpoint_tips"))
+                st.markdown(f"**{tr('label_additional_variables_example')}**")
+                st.code(ADDITIONAL_VARIABLES_EXAMPLE_JSON, language="json")
                 create_defaults = {
                     "create_ep_name": "",
                     "create_ep_provider_select": "",
@@ -847,12 +962,19 @@ def render(context: dict) -> None:
                         '  "model": "{{MODEL_NAME}}",\n'
                         '  "input": "{{PROMPT}}",\n'
                         '  "max_output_tokens": 1000,\n'
-                        '  "temperature": 0.7\n'
+                        '  "temperature": "{{TEMPERATURE}}",\n'
+                        '  "reasoning": "{{REASONING}}"\n'
                         '}'
                     )
                     st.session_state["create_ep_response_paths"] = "$output[1].content[0].text\n$output[0].content[0].text"
                     st.session_state["create_ep_response_type"] = "json"
-                    st.session_state["create_ep_extra_vars"] = "{}"
+                    st.session_state["create_ep_extra_vars"] = ADDITIONAL_VARIABLES_EXAMPLE_JSON
+
+                if st.button(
+                    tr("button_use_additional_variables_example"),
+                    key="button_use_additional_variables_example_create",
+                ):
+                    st.session_state["create_ep_extra_vars"] = ADDITIONAL_VARIABLES_EXAMPLE_JSON
 
                 with st.form("create_endpoint"):
                     name = st.text_input(
@@ -948,7 +1070,7 @@ def render(context: dict) -> None:
                             else:
                                 custom_headers = parse_json_field(custom_headers_raw) or {}
                                 default_params = parse_json_field(default_params_raw) or {}
-                                custom_variables = _parse_variable_values(extra_variables_raw)
+                                custom_variables, custom_variable_types = _parse_variable_values(extra_variables_raw)
                                 if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
                                     raise ValueError("json_type")
                                 missing_variables = [
@@ -988,6 +1110,7 @@ def render(context: dict) -> None:
                                         None,
                                         secret_type="none",
                                         variable_values=variable_values,
+                                        variable_types=custom_variable_types,
                                     )
                                     session.commit()
                                     st.success(tr("msg_endpoint_created"))
@@ -1016,13 +1139,38 @@ def render(context: dict) -> None:
                         endpoint = get_endpoint(session, selected_id)
                         secret_manager = SecretManager()
                         endpoint_variables = secret_manager.get_variables(session, endpoint.id) if endpoint else {}
-                        stored_api_token = endpoint_variables.get("API_TOKEN", "")
+                        endpoint_variable_types = (
+                            secret_manager.get_variable_types(session, endpoint.id) if endpoint else {}
+                        )
+                        stored_api_token = str(endpoint_variables.get("API_TOKEN", "") or "")
                         masked_token = mask_secret(stored_api_token, show_last=4) if stored_api_token else tr("secret_not_set")
                         stored_custom_variables = {
                             key: value
                             for key, value in endpoint_variables.items()
                             if key not in RESERVED_TEMPLATE_VARS
                         }
+                        stored_custom_variable_types = {
+                            key: endpoint_variable_types.get(key, _infer_variable_type(value))
+                            for key, value in stored_custom_variables.items()
+                        }
+                        stored_custom_variable_definitions = _serialize_variable_definitions(
+                            stored_custom_variables,
+                            stored_custom_variable_types,
+                        )
+                        edit_extra_vars_key = f"edit_ep_extra_vars_{endpoint.id}"
+                        if edit_extra_vars_key not in st.session_state:
+                            st.session_state[edit_extra_vars_key] = (
+                                json.dumps(stored_custom_variable_definitions, indent=2, ensure_ascii=False)
+                                if stored_custom_variable_definitions
+                                else "{}"
+                            )
+                        st.markdown(f"**{tr('label_additional_variables_example')}**")
+                        st.code(ADDITIONAL_VARIABLES_EXAMPLE_JSON, language="json")
+                        if st.button(
+                            tr("button_use_additional_variables_example"),
+                            key=f"button_use_additional_variables_example_edit_{endpoint.id}",
+                        ):
+                            st.session_state[edit_extra_vars_key] = ADDITIONAL_VARIABLES_EXAMPLE_JSON
 
                         with st.form("edit_endpoint"):
                             name = st.text_input(
@@ -1095,7 +1243,7 @@ def render(context: dict) -> None:
                             )
                             extra_variables_raw = st.text_area(
                                 tr("label_additional_variables"),
-                                value=json.dumps(stored_custom_variables, indent=2) if stored_custom_variables else "{}",
+                                key=edit_extra_vars_key,
                                 help=tr("help_additional_variables"),
                             )
                             detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
@@ -1111,7 +1259,7 @@ def render(context: dict) -> None:
                                 try:
                                     custom_headers = parse_json_field(custom_headers_raw) or {}
                                     default_params = parse_json_field(default_params_raw) or {}
-                                    custom_variables = _parse_variable_values(extra_variables_raw)
+                                    custom_variables, custom_variable_types = _parse_variable_values(extra_variables_raw)
                                     if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
                                         raise ValueError("json_type")
                                     missing_variables = [
@@ -1153,6 +1301,7 @@ def render(context: dict) -> None:
                                             None,
                                             secret_type="none",
                                             variable_values=variable_values,
+                                            variable_types=custom_variable_types,
                                         )
                                         session.commit()
                                         st.success(tr("msg_endpoint_updated"))
@@ -1455,6 +1604,7 @@ def render(context: dict) -> None:
             st.subheader(tr("section_test_module_settings"))
             current_tests_threads = max(1, int(settings.get("tests_max_threads", 1)))
             current_tests_timeout = max(5, int(settings.get("tests_request_timeout", settings["default_timeout"])))
+            current_tests_retries = max(0, int(settings.get("tests_retries", 0)))
             with st.form("test_module_settings"):
                 tests_max_threads = st.number_input(
                     tr("label_tests_max_threads"),
@@ -1472,6 +1622,14 @@ def render(context: dict) -> None:
                     step=1,
                     help=tr("help_tests_request_timeout"),
                 )
+                tests_retries = st.number_input(
+                    tr("label_tests_retries"),
+                    min_value=0,
+                    max_value=10,
+                    value=current_tests_retries,
+                    step=1,
+                    help=tr("help_tests_retries"),
+                )
                 tests_result_format = st.selectbox(
                     tr("label_tests_result_format"),
                     options=["xlsx", "json"],
@@ -1483,6 +1641,7 @@ def render(context: dict) -> None:
                 if save_test_module_settings:
                     set_setting(session, "tests_max_threads", str(int(tests_max_threads)))
                     set_setting(session, "tests_request_timeout", str(int(tests_request_timeout)))
+                    set_setting(session, "tests_retries", str(int(tests_retries)))
                     set_setting(session, "tests_result_format", tests_result_format)
                     record_event(
                         session,
@@ -1492,6 +1651,7 @@ def render(context: dict) -> None:
                         after_value={
                             "tests_max_threads": int(tests_max_threads),
                             "tests_request_timeout": int(tests_request_timeout),
+                            "tests_retries": int(tests_retries),
                             "tests_result_format": tests_result_format,
                         },
                     )
@@ -2108,3 +2268,6 @@ def render(context: dict) -> None:
                                         st.success(tr("msg_suites_exported", path=target_path))
                                     except Exception as exc:
                                         st.error(tr("error_test_export_failed", error=exc))
+
+    if config_page == "red_teaming":
+        red_team_config.render(context, tr)

@@ -12,6 +12,7 @@ from app.domain import models
 from app.services.audit_service import record_event
 
 RESERVED_TEMPLATE_VARS = {"API_TOKEN", "MODEL_NAME", "PROMPT"}
+SUPPORTED_VARIABLE_TYPES = {"string", "number", "boolean", "json"}
 TEMPLATE_VAR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 TEMPLATE_VAR_PATTERNS = (
     re.compile(r"\{\{\s*(" + TEMPLATE_VAR_NAME + r")\s*\}\}"),
@@ -62,6 +63,100 @@ def _read_value(row: dict[str, Any], keys: list[str]) -> Any:
     return None
 
 
+def _normalize_variable_type(value: Any) -> str:
+    normalized = str(value or "string").strip().lower()
+    if normalized not in SUPPORTED_VARIABLE_TYPES:
+        raise ValueError(f"unsupported variable type '{value}'")
+    return normalized
+
+
+def _infer_variable_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, (dict, list)):
+        return "json"
+    return "string"
+
+
+def _coerce_boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError(f"invalid boolean value '{value}'")
+
+
+def _coerce_number(value: Any) -> int | float:
+    if isinstance(value, bool):
+        raise ValueError(f"invalid number value '{value}'")
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            raise ValueError("empty number value")
+        if "." in raw:
+            return float(raw)
+        return int(raw)
+    raise ValueError(f"invalid number value '{value}'")
+
+
+def _coerce_json(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        return json.loads(raw)
+    return value
+
+
+def _coerce_variable_value(value: Any, variable_type: str) -> Any:
+    if variable_type == "string":
+        return "" if value is None else str(value)
+    if variable_type == "number":
+        return _coerce_number(value)
+    if variable_type == "boolean":
+        return _coerce_boolean(value)
+    if variable_type == "json":
+        return _coerce_json(value)
+    raise ValueError(f"unsupported variable type '{variable_type}'")
+
+
+def _normalize_additional_variables(
+    raw_variables: dict[str, Any],
+    *,
+    row_index: int | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    values: dict[str, Any] = {}
+    variable_types: dict[str, str] = {}
+    for raw_key, raw_entry in raw_variables.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        try:
+            if isinstance(raw_entry, dict) and ("value" in raw_entry or "type" in raw_entry):
+                variable_type = _normalize_variable_type(raw_entry.get("type", "string"))
+                value = _coerce_variable_value(raw_entry.get("value"), variable_type)
+            else:
+                variable_type = _infer_variable_type(raw_entry)
+                value = _coerce_variable_value(raw_entry, variable_type)
+        except Exception as exc:
+            if row_index is not None:
+                raise ValueError(f"row {row_index}: invalid variable '{key}': {exc}") from exc
+            raise ValueError(f"invalid variable '{key}': {exc}") from exc
+        values[key] = value
+        variable_types[key] = variable_type
+    return values, variable_types
+
+
 def _parse_json_object(value: Any, *, field_name: str, row_index: int) -> dict[str, Any]:
     if _is_missing(value):
         return {}
@@ -91,7 +186,8 @@ def create_endpoint(
     data: dict,
     secret_value: str | None = None,
     secret_type: str = "api_key",
-    variable_values: dict[str, str] | None = None,
+    variable_values: dict[str, Any] | None = None,
+    variable_types: dict[str, str] | None = None,
 ) -> models.Endpoint:
     endpoint = models.Endpoint(**data)
     session.add(endpoint)
@@ -102,7 +198,13 @@ def create_endpoint(
         if secret_value:
             stored_variables["API_TOKEN"] = secret_value
         if stored_variables:
-            SecretManager().store_variables(session, endpoint.id, stored_variables, secret_type="template_vars")
+            SecretManager().store_variables(
+                session,
+                endpoint.id,
+                stored_variables,
+                variable_types=variable_types,
+                secret_type="template_vars",
+            )
 
     record_event(session, "create", "endpoint", endpoint.id, after_value=data)
     return endpoint
@@ -114,7 +216,8 @@ def update_endpoint(
     data: dict,
     secret_value: str | None = None,
     secret_type: str = "api_key",
-    variable_values: dict[str, str] | None = None,
+    variable_values: dict[str, Any] | None = None,
+    variable_types: dict[str, str] | None = None,
 ) -> models.Endpoint:
     before = {
         "name": endpoint.name,
@@ -134,7 +237,13 @@ def update_endpoint(
         if secret_value:
             stored_variables["API_TOKEN"] = secret_value
         if stored_variables:
-            SecretManager().store_variables(session, endpoint.id, stored_variables, secret_type="template_vars")
+            SecretManager().store_variables(
+                session,
+                endpoint.id,
+                stored_variables,
+                variable_types=variable_types,
+                secret_type="template_vars",
+            )
         record_event(session, "rotate", "endpoint_secret", endpoint.id)
 
     record_event(session, "update", "endpoint", endpoint.id, before_value=before, after_value=data)
@@ -152,10 +261,22 @@ def endpoints_to_records(session: Session, endpoints: list[models.Endpoint]) -> 
     records: list[dict[str, Any]] = []
     for endpoint in endpoints:
         endpoint_variables = secret_manager.get_variables(session, endpoint.id)
+        endpoint_variable_types = secret_manager.get_variable_types(session, endpoint.id)
         custom_variables = {
             key: value
             for key, value in endpoint_variables.items()
             if key not in RESERVED_TEMPLATE_VARS
+        }
+        custom_variable_types = {
+            key: endpoint_variable_types.get(key, _infer_variable_type(value))
+            for key, value in custom_variables.items()
+        }
+        serialized_additional_variables = {
+            key: {
+                "value": custom_variables[key],
+                "type": custom_variable_types.get(key, "string"),
+            }
+            for key in sorted(custom_variables.keys())
         }
         records.append(
             {
@@ -167,7 +288,7 @@ def endpoints_to_records(session: Session, endpoints: list[models.Endpoint]) -> 
                 "body": endpoint.default_params or {},
                 "response_paths": endpoint.response_paths or "",
                 "response_type": endpoint.response_type or "json",
-                "additional_variables": custom_variables,
+                "additional_variables": serialized_additional_variables,
                 # Always blank in exports for security.
                 "api_token": "",
             }
@@ -255,11 +376,14 @@ def validate_endpoint_records(
             errors.append(str(exc))
             continue
 
-        normalized_variables = {
-            str(key).strip(): "" if value is None else str(value)
-            for key, value in additional_variables.items()
-            if str(key).strip()
-        }
+        try:
+            normalized_variables, normalized_variable_types = _normalize_additional_variables(
+                additional_variables,
+                row_index=row_index,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
 
         detected_vars = _extract_template_variables(
             json.dumps(headers, ensure_ascii=False),
@@ -295,6 +419,7 @@ def validate_endpoint_records(
                 "timeout": int(default_timeout),
                 "retry_count": 0,
                 "variable_values": variable_values,
+                "variable_types": normalized_variable_types,
             }
         )
 
@@ -339,6 +464,7 @@ def import_endpoint_records(session: Session, records: list[dict[str, Any]]) -> 
             None,
             secret_type="none",
             variable_values=record.get("variable_values"),
+            variable_types=record.get("variable_types"),
         )
         existing_names.add(name.lower())
         created += 1

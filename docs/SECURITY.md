@@ -1,7 +1,7 @@
-# PromptOps Security
+# CyberPrompt AI Security
 
 ## Secret Encryption
-PromptOps encrypts sensitive endpoint credentials before storing them.
+CyberPrompt AI encrypts sensitive endpoint credentials before storing them.
 - Library: `cryptography` (Fernet authenticated encryption).
 - Secrets are stored in `endpoint_secrets` as encrypted blobs.
 - Decryption happens only in memory when needed for outbound requests.

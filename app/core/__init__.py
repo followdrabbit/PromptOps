@@ -1,1 +1,1 @@
-"""Core utilities for PromptOps."""
+"""Core utilities for CyberPrompt AI."""

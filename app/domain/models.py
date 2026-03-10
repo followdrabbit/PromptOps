@@ -175,6 +175,74 @@ class TestRunResult(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class RedTeamSuite(Base):
+    __tablename__ = "red_team_suites"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    test_cases = relationship("RedTeamCase", back_populates="suite", cascade="all, delete-orphan")
+
+
+class RedTeamCase(Base):
+    __tablename__ = "red_team_cases"
+
+    id = Column(Integer, primary_key=True)
+    suite_id = Column(Integer, ForeignKey("red_team_suites.id"), nullable=False)
+    order = Column(Integer, nullable=True)
+    prompt = Column(Text, nullable=False)
+    purpose = Column(Text, nullable=True)
+    expected_result = Column(Text, nullable=True)
+    relevance = Column(Integer, nullable=True)
+    mandatory_rules = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    suite = relationship("RedTeamSuite", back_populates="test_cases")
+
+
+class RedTeamRun(Base):
+    __tablename__ = "red_team_runs"
+
+    id = Column(Integer, primary_key=True)
+    suite_id = Column(Integer, ForeignKey("red_team_suites.id"), nullable=False)
+    target_endpoint_id = Column(Integer, ForeignKey("endpoints.id"), nullable=False)
+    evaluator_endpoint_id = Column(Integer, ForeignKey("endpoints.id"), nullable=False)
+    status = Column(String(40), nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    total_tests = Column(Integer, nullable=True)
+    passed = Column(Integer, nullable=True)
+    failed = Column(Integer, nullable=True)
+    errors = Column(Integer, nullable=True)
+
+
+class RedTeamRunResult(Base):
+    __tablename__ = "red_team_run_results"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("red_team_runs.id"), nullable=False)
+    case_id = Column(Integer, ForeignKey("red_team_cases.id"), nullable=False)
+    status = Column(String(40), nullable=False)
+    prompt_sent = Column(Text, nullable=False)
+    response_received = Column(Text, nullable=True)
+    evaluation_summary = Column(Text, nullable=True)
+    evaluation_score = Column(Float, nullable=True)
+    evaluation_verdict = Column(String(40), nullable=True)
+    llm_judge_model = Column(String(120), nullable=True)
+    evaluation_verdict_justification = Column(Text, nullable=True)
+    evaluation_score_justification = Column(Text, nullable=True)
+    evaluator_response = Column(Text, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    evaluation_latency_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

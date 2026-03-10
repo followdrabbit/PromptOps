@@ -16,6 +16,11 @@ from app.domain.models import Endpoint
 class OpenAICompatibleProvider:
     REQUEST_PREVIEW_LIMIT = 6_000
     RESPONSE_PREVIEW_LIMIT = 8_000
+    FULL_TOKEN_PATTERNS = (
+        re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$"),
+        re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$"),
+        re.compile(r"^<([A-Za-z_][A-Za-z0-9_]*)>$"),
+    )
 
     def __init__(
         self,
@@ -43,12 +48,24 @@ class OpenAICompatibleProvider:
             serialized = str(safe_payload)
         return self._truncate_preview(serialized, limit)
 
-    def _replace_string(self, value: str, runtime_vars: dict[str, str]) -> str:
+    def _replace_string(self, value: str, runtime_vars: dict[str, Any]) -> str:
         replaced = value
+        def stringify(value_to_stringify: Any) -> str:
+            if isinstance(value_to_stringify, str):
+                return value_to_stringify
+            if isinstance(value_to_stringify, bool):
+                return "true" if value_to_stringify else "false"
+            if isinstance(value_to_stringify, (int, float)):
+                return str(value_to_stringify)
+            try:
+                return json.dumps(value_to_stringify, ensure_ascii=False)
+            except TypeError:
+                return str(value_to_stringify)
+
         # 1) Replace template placeholders ({{VAR}}, ${VAR}, and legacy <VAR>).
         def replace_token(match: re.Match[str]) -> str:
             key = match.group(1)
-            return str(runtime_vars.get(key, match.group(0)))
+            return stringify(runtime_vars.get(key, match.group(0)))
 
         for pattern in (
             r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}",
@@ -58,11 +75,18 @@ class OpenAICompatibleProvider:
             replaced = re.sub(pattern, replace_token, replaced)
         # 2) Replace reserved/bare variable tokens like MODEL_NAME and PROMPT.
         for key, var_value in runtime_vars.items():
-            replaced = re.sub(rf"\b{re.escape(key)}\b", lambda _m: str(var_value), replaced)
+            replaced = re.sub(rf"\b{re.escape(key)}\b", lambda _m: stringify(var_value), replaced)
         return replaced
 
-    def _replace_placeholders(self, payload: Any, runtime_vars: dict[str, str]) -> Any:
+    def _replace_placeholders(self, payload: Any, runtime_vars: dict[str, Any]) -> Any:
         if isinstance(payload, str):
+            stripped_payload = payload.strip()
+            for pattern in self.FULL_TOKEN_PATTERNS:
+                match = pattern.match(stripped_payload)
+                if match:
+                    variable_name = match.group(1)
+                    if variable_name in runtime_vars:
+                        return runtime_vars[variable_name]
             return self._replace_string(payload, runtime_vars)
         if isinstance(payload, list):
             return [self._replace_placeholders(item, runtime_vars) for item in payload]
@@ -70,7 +94,7 @@ class OpenAICompatibleProvider:
             return {key: self._replace_placeholders(value, runtime_vars) for key, value in payload.items()}
         return payload
 
-    def _build_headers(self, runtime_vars: dict[str, str]) -> dict[str, str]:
+    def _build_headers(self, runtime_vars: dict[str, Any]) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.endpoint.custom_headers:
             rendered_headers = self._replace_placeholders(self.endpoint.custom_headers, runtime_vars)

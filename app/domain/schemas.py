@@ -107,6 +107,57 @@ class TestRunResultSchema(BaseModel):
     timestamp: Optional[datetime] = None
 
 
+class RedTeamSuiteSchema(BaseModel):
+    id: Optional[int] = None
+    name: str
+    description: Optional[str] = None
+
+
+class RedTeamCaseSchema(BaseModel):
+    id: Optional[int] = None
+    suite_id: int
+    order: Optional[int] = None
+    prompt: str
+    purpose: Optional[str] = None
+    expected_result: Optional[str] = None
+    relevance: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class RedTeamRunSchema(BaseModel):
+    id: Optional[int] = None
+    suite_id: int
+    target_endpoint_id: int
+    evaluator_endpoint_id: int
+    status: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    total_tests: Optional[int] = None
+    passed: Optional[int] = None
+    failed: Optional[int] = None
+    errors: Optional[int] = None
+
+
+class RedTeamRunResultSchema(BaseModel):
+    id: Optional[int] = None
+    run_id: int
+    case_id: int
+    status: str
+    prompt_sent: str
+    response_received: Optional[str] = None
+    evaluation_summary: Optional[str] = None
+    evaluation_score: Optional[float] = None
+    evaluation_verdict: Optional[str] = None
+    llm_judge_model: Optional[str] = None
+    evaluation_verdict_justification: Optional[str] = None
+    evaluation_score_justification: Optional[str] = None
+    evaluator_response: Optional[str] = None
+    latency_ms: Optional[int] = None
+    evaluation_latency_ms: Optional[int] = None
+    error_message: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+
 class AuditEventSchema(BaseModel):
     id: Optional[int] = None
     actor: str

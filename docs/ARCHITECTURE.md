@@ -1,7 +1,7 @@
-# PromptOps Architecture
+# CyberPrompt AI Architecture
 
 ## Overview
-PromptOps is organized into clear layers to keep responsibilities separated and make future growth easier:
+CyberPrompt AI is organized into clear layers to keep responsibilities separated and make future growth easier:
 - UI layer: Streamlit pages under `app/ui/`
 - Application/services layer: domain operations in `app/services/` and jobs in `app/jobs/`
 - Domain layer: SQLAlchemy models and Pydantic schemas under `app/domain/`

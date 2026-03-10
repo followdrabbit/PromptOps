@@ -1,1 +1,1 @@
-"""PromptOps application package."""
+"""CyberPrompt AI application package."""

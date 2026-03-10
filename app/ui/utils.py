@@ -24,7 +24,14 @@ SETTINGS_KEYS = {
     "ssl_verify": "ssl_verify",
     "tests_max_threads": "tests_max_threads",
     "tests_request_timeout": "tests_request_timeout",
+    "tests_retries": "tests_retries",
     "tests_result_format": "tests_result_format",
+    "redteam_max_threads": "redteam_max_threads",
+    "redteam_request_timeout": "redteam_request_timeout",
+    "redteam_retries": "redteam_retries",
+    "redteam_result_format": "redteam_result_format",
+    "redteam_evaluator_endpoint_id": "redteam_evaluator_endpoint_id",
+    "redteam_evaluator_prompt_template": "redteam_evaluator_prompt_template",
 }
 
 
@@ -35,12 +42,39 @@ def _to_int(value: Any, fallback: int) -> int:
         return fallback
 
 
+def _to_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = str(value).strip()
+    except Exception:
+        return None
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_runtime_settings(session: Session, config: AppConfig) -> dict[str, Any]:
     tests_result_format = (
         get_setting(session, "tests_result_format", config.tests_result_format).strip().lower()
     )
     if tests_result_format not in {"xlsx", "json"}:
         tests_result_format = "xlsx"
+    redteam_result_format = (
+        get_setting(session, "redteam_result_format", config.redteam_result_format).strip().lower()
+    )
+    if redteam_result_format not in {"xlsx", "json"}:
+        redteam_result_format = "xlsx"
+    redteam_evaluator_endpoint_id = _to_optional_int(
+        get_setting(
+            session,
+            "redteam_evaluator_endpoint_id",
+            "" if config.redteam_evaluator_endpoint_id is None else str(config.redteam_evaluator_endpoint_id),
+        )
+    )
     return {
         "language": get_setting(session, "language", config.language),
         "log_level": get_setting(session, "log_level", config.log_level),
@@ -66,7 +100,30 @@ def get_runtime_settings(session: Session, config: AppConfig) -> dict[str, Any]:
             get_setting(session, "tests_request_timeout", str(config.tests_request_timeout)),
             config.tests_request_timeout,
         ),
+        "tests_retries": _to_int(
+            get_setting(session, "tests_retries", str(config.tests_retries)),
+            config.tests_retries,
+        ),
         "tests_result_format": tests_result_format,
+        "redteam_max_threads": _to_int(
+            get_setting(session, "redteam_max_threads", str(config.redteam_max_threads)),
+            config.redteam_max_threads,
+        ),
+        "redteam_request_timeout": _to_int(
+            get_setting(session, "redteam_request_timeout", str(config.redteam_request_timeout)),
+            config.redteam_request_timeout,
+        ),
+        "redteam_retries": _to_int(
+            get_setting(session, "redteam_retries", str(config.redteam_retries)),
+            config.redteam_retries,
+        ),
+        "redteam_result_format": redteam_result_format,
+        "redteam_evaluator_endpoint_id": redteam_evaluator_endpoint_id,
+        "redteam_evaluator_prompt_template": get_setting(
+            session,
+            "redteam_evaluator_prompt_template",
+            config.redteam_evaluator_prompt_template,
+        ),
     }
 
 

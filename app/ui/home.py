@@ -11,6 +11,7 @@ from app.ui.i18n import get_translator
 def render(context: dict) -> None:
     config = context["config"]
     session_factory = context["session_factory"]
+    brand_name = config.name or "CyberPrompt AI"
 
     with get_session(session_factory) as session:
         lang = get_runtime_settings(session, config).get("language", "en")
@@ -19,7 +20,7 @@ def render(context: dict) -> None:
         st.markdown(
             f"""
             <div class="page-intro">
-                <span class="intro-badge">PromptOps</span>
+                <span class="intro-badge">{brand_name}</span>
                 <div class="intro-title">{tr("home_title")}</div>
                 <p class="intro-subtitle">
                     {tr("home_subtitle")}
@@ -82,6 +83,12 @@ def render(context: dict) -> None:
                     <span class="card-badge">{tr("card_badge_execution")}</span>
                     <div class="card-title">{tr("card_title_tests")}</div>
                     <p class="card-body">{tr("card_body_tests")}</p>
+                    <div class="card-action">{tr("card_action_open")}</div>
+                </a>
+                <a class="card" href="?nav=Red%20Teaming" target="_self">
+                    <span class="card-badge">{tr("card_badge_red_team")}</span>
+                    <div class="card-title">{tr("card_title_red_team")}</div>
+                    <p class="card-body">{tr("card_body_red_team")}</p>
                     <div class="card-action">{tr("card_action_open")}</div>
                 </a>
             </div>

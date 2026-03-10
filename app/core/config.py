@@ -10,7 +10,7 @@ from app.core.paths import ROOT_DIR, ensure_dir
 
 @dataclass(frozen=True)
 class AppConfig:
-    name: str = "PromptOps"
+    name: str = "CyberPrompt AI"
     language: str = "en"
     log_level: str = "INFO"
     default_timeout: int = 30
@@ -26,7 +26,14 @@ class AppConfig:
     ssl_verify: bool = True
     tests_max_threads: int = 1
     tests_request_timeout: int = 30
+    tests_retries: int = 0
     tests_result_format: str = "xlsx"
+    redteam_max_threads: int = 1
+    redteam_request_timeout: int = 30
+    redteam_retries: int = 0
+    redteam_result_format: str = "xlsx"
+    redteam_evaluator_endpoint_id: int | None = None
+    redteam_evaluator_prompt_template: str = ""
 
     @property
     def output_path(self) -> Path:
@@ -59,9 +66,18 @@ def load_config(path: Path | None = None) -> AppConfig:
     tests_result_format = str(app.get("tests_result_format", "xlsx")).lower()
     if tests_result_format not in {"xlsx", "json"}:
         tests_result_format = "xlsx"
+    redteam_result_format = str(app.get("redteam_result_format", "xlsx")).lower()
+    if redteam_result_format not in {"xlsx", "json"}:
+        redteam_result_format = "xlsx"
+    raw_redteam_evaluator_endpoint_id = app.get("redteam_evaluator_endpoint_id")
+    redteam_evaluator_endpoint_id = (
+        int(raw_redteam_evaluator_endpoint_id)
+        if raw_redteam_evaluator_endpoint_id not in (None, "")
+        else None
+    )
 
     return AppConfig(
-        name=app.get("name", "PromptOps"),
+        name=app.get("name", "CyberPrompt AI"),
         language=app.get("language", "en"),
         log_level=app.get("log_level", "INFO"),
         default_timeout=int(app.get("default_timeout", 30)),
@@ -77,7 +93,14 @@ def load_config(path: Path | None = None) -> AppConfig:
         ssl_verify=bool(app.get("ssl_verify", True)),
         tests_max_threads=int(app.get("tests_max_threads", 1)),
         tests_request_timeout=int(app.get("tests_request_timeout", 30)),
+        tests_retries=int(app.get("tests_retries", 0)),
         tests_result_format=tests_result_format,
+        redteam_max_threads=int(app.get("redteam_max_threads", 1)),
+        redteam_request_timeout=int(app.get("redteam_request_timeout", 30)),
+        redteam_retries=int(app.get("redteam_retries", 0)),
+        redteam_result_format=redteam_result_format,
+        redteam_evaluator_endpoint_id=redteam_evaluator_endpoint_id,
+        redteam_evaluator_prompt_template=str(app.get("redteam_evaluator_prompt_template", "")),
     )
 
 

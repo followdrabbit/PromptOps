@@ -9,6 +9,7 @@ from app.domain import models
 from app.infra.db import get_session
 from app.services.chat_service import add_message, create_session, delete_session, list_sessions, rename_session
 from app.services.endpoint_service import list_endpoints
+from app.ui.endpoint_variables import render_runtime_variable_editor
 from app.ui.utils import get_runtime_settings
 from app.ui.i18n import get_translator
 
@@ -71,6 +72,18 @@ def render(context: dict) -> None:
             key=endpoint_select_key,
         )
         endpoint = next(ep for ep in endpoints if ep.id == endpoint_id)
+        secret_manager = SecretManager()
+        endpoint_variables = secret_manager.get_variables(session, endpoint.id)
+        endpoint_variable_types = secret_manager.get_variable_types(session, endpoint.id)
+        with st.sidebar.expander(tr("section_runtime_additional_variables"), expanded=False):
+            runtime_variable_overrides = render_runtime_variable_editor(
+                tr,
+                endpoint_name=endpoint.name,
+                endpoint_id=endpoint.id,
+                variables=endpoint_variables,
+                variable_types=endpoint_variable_types,
+                key_prefix="chat_runtime_var",
+            )
 
         default_title = tr("chat_default_title")
         if st.sidebar.button(tr("button_new_chat"), key=f"chat_new_btn_{endpoint.id}"):
@@ -220,7 +233,8 @@ def render(context: dict) -> None:
                 {"role": "user", "content": prompt}
             ]
             try:
-                variables = SecretManager().get_variables(session, endpoint.id)
+                variables = dict(endpoint_variables)
+                variables.update(runtime_variable_overrides)
                 provider = get_provider_class(endpoint.provider)(
                     endpoint,
                     variables,

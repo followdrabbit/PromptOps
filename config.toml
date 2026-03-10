@@ -1,5 +1,5 @@
 [app]
-name = "PromptOps"
+name = "CyberPrompt AI"
 language = "en"
 log_level = "INFO"
 default_timeout = 30
@@ -15,4 +15,11 @@ secure_storage = "fernet"
 ssl_verify = true
 tests_max_threads = 1
 tests_request_timeout = 30
+tests_retries = 0
 tests_result_format = "xlsx"
+redteam_max_threads = 1
+redteam_request_timeout = 30
+redteam_retries = 0
+redteam_result_format = "xlsx"
+redteam_evaluator_endpoint_id = ""
+redteam_evaluator_prompt_template = ""
