@@ -12,7 +12,7 @@ import streamlit as st
 from app.core.config import ensure_directories, load_config
 from app.core.logging import set_log_level, setup_logging
 from app.infra.db import build_engine, build_session_factory, get_session, init_db
-from app.ui import chat, compare, config as config_ui, home, red_teaming, tests
+from app.ui import chat, compare, config as config_ui, documentation, home, red_teaming, tests
 from app.ui.utils import apply_global_styles, get_runtime_settings
 from app.ui.i18n import get_translator
 
@@ -52,7 +52,7 @@ def main() -> None:
         )
 
     st.sidebar.title(brand_name)
-    nav_options = ["Home", "Configuration", "Chat", "Compare", "Automated Tests", "Red Teaming"]
+    nav_options = ["Home", "Configuration", "Chat", "Compare", "Automated Tests", "Red Teaming", "Documentation"]
     nav_labels = {
         "Home": tr("nav_home"),
         "Configuration": tr("nav_configuration"),
@@ -60,6 +60,7 @@ def main() -> None:
         "Compare": tr("nav_compare"),
         "Automated Tests": tr("nav_tests"),
         "Red Teaming": tr("nav_red_teaming"),
+        "Documentation": tr("nav_documentation"),
     }
     if "nav" not in st.session_state:
         st.session_state["nav"] = "Home"
@@ -91,6 +92,8 @@ def main() -> None:
         tests.render(context)
     elif selection == "Red Teaming":
         red_teaming.render(context)
+    elif selection == "Documentation":
+        documentation.render(context)
 
 
 if __name__ == "__main__":

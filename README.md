@@ -4,10 +4,12 @@ CyberPrompt AI is a production-oriented MVP for managing AI endpoints, chat sess
 ## Features
 - Endpoint registry with secure local credential storage
 - Chat sessions with persistent history
+- Side-by-side endpoint comparison (`Compare`)
 - XLSX import and sequential test execution
 - XLSX export for test run results
 - Red Teaming suites with evaluator-model analysis
 - Logging and audit trails for critical actions
+- In-app documentation module (`Documentation`)
 
 ## Quick Start
 1. Create and activate a virtual environment.
@@ -34,6 +36,31 @@ export PROMPTOPS_ALLOW_KEYFILE=1
 ```bash
 streamlit run app/main.py
 ```
+
+5. Open `Documentation` in the sidebar to access setup guides, module instructions, configuration reference, and security/architecture docs.
+
+## Security Quick Start (5 minutes)
+1. Configure encryption key (recommended):
+
+```bash
+export PROMPTOPS_MASTER_KEY="your_fernet_key"
+```
+
+2. Optional: identify the operator in audit logs:
+
+```bash
+export PROMPTOPS_ACTOR="your.name"
+```
+
+3. Run the app and set `Configuration > General Settings > Log level` to `INFO` (or `DEBUG` for troubleshooting).
+4. Execute one action (for example, send a chat prompt), then verify:
+- app log: `data/logs/app.log`
+- audit log: `data/audit/audit.log`
+
+Detailed guides:
+- Secret key setup and usage: `docs/SECURITY.md#master-key-management`
+- Logging setup and inspection: `docs/SECURITY.md#logging-and-redaction` and `docs/OPERATIONS.md#logging`
+- Audit usage: `docs/SECURITY.md#audit-trail` and `docs/OPERATIONS.md#audit-events`
 
 ## Configuration
 Default settings live in `config.toml`. Runtime overrides are stored in the `settings` table and managed from the UI.
@@ -65,8 +92,14 @@ Endpoint `Additional variables (JSON)` supports typed entries, for example:
 These types are reflected in runtime editors in `Chat`, `Automated Tests`, and `Red Teaming`.
 
 ## Documentation
+- `docs/OVERVIEW.md`
+- `docs/GETTING_STARTED.md`
+- `docs/MODULES.md`
+- `docs/CONFIGURATION.md`
+- `docs/OPERATIONS.md`
 - `docs/ARCHITECTURE.md`
 - `docs/SECURITY.md`
+- `docs/FAQ.md`
 
 ## Data Storage
 Local runtime data is stored under `data/` and ignored by git. This includes:

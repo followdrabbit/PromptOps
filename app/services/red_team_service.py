@@ -439,7 +439,6 @@ def export_red_team_run_results(
     run = session.query(models.RedTeamRun).filter(models.RedTeamRun.id == run_id).one_or_none()
     target_name = ""
     evaluator_name = ""
-    evaluator_model_name = ""
     if run is not None:
         target_endpoint = session.query(models.Endpoint).filter(models.Endpoint.id == run.target_endpoint_id).one_or_none()
         evaluator_endpoint = (
@@ -449,7 +448,6 @@ def export_red_team_run_results(
             target_name = target_endpoint.name
         if evaluator_endpoint is not None:
             evaluator_name = evaluator_endpoint.name
-            evaluator_model_name = evaluator_endpoint.model_name or ""
 
     results = (
         session.query(models.RedTeamRunResult)
@@ -471,7 +469,6 @@ def export_red_team_run_results(
             {
                 "Selected Endpoint": target_name,
                 "Evaluator Endpoint": evaluator_name,
-                "LLM Judge Model": result.llm_judge_model or evaluator_model_name,
                 "prompt_sent": result.prompt_sent,
                 "purpose_of_test": case.purpose if case else None,
                 "expected_result": case.expected_result if case else None,
@@ -483,7 +480,6 @@ def export_red_team_run_results(
                 ),
                 "LLM Judge Score": result.evaluation_score,
                 "LLM Judge Score Justification": result.evaluation_score_justification,
-                "evaluation_score": result.evaluation_score,
                 "evaluation_summary": result.evaluation_summary,
                 "error_message": result.error_message,
                 "timestamp": result.timestamp,

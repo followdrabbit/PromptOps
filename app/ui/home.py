@@ -91,6 +91,12 @@ def render(context: dict) -> None:
                     <p class="card-body">{tr("card_body_red_team")}</p>
                     <div class="card-action">{tr("card_action_open")}</div>
                 </a>
+                <a class="card" href="?nav=Documentation" target="_self">
+                    <span class="card-badge">{tr("card_badge_docs")}</span>
+                    <div class="card-title">{tr("card_title_docs")}</div>
+                    <p class="card-body">{tr("card_body_docs")}</p>
+                    <div class="card-action">{tr("card_action_open")}</div>
+                </a>
             </div>
             """,
             unsafe_allow_html=True,
