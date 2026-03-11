@@ -21,6 +21,18 @@ class OpenAICompatibleProvider:
         re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$"),
         re.compile(r"^<([A-Za-z_][A-Za-z0-9_]*)>$"),
     )
+    REQUEST_MODE_ALIASES = {
+        "responses": "responses",
+        "response": "responses",
+        "completions": "completions",
+        "completion": "completions",
+        "chat completion": "completions",
+        "chat completions": "completions",
+        "chat_completions": "completions",
+        "chat-completions": "completions",
+        "completation": "completions",
+        "completations": "completions",
+    }
 
     def __init__(
         self,
@@ -108,6 +120,53 @@ class OpenAICompatibleProvider:
             headers[header_name] = f"{prefix}{api_token}"
 
         return headers
+
+    @classmethod
+    def _normalize_request_mode(cls, value: Any) -> str:
+        normalized = str(value or "responses").strip().lower()
+        return cls.REQUEST_MODE_ALIASES.get(normalized, "responses")
+
+    @staticmethod
+    def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+        normalized_messages: list[dict[str, str]] = []
+        for message in messages or []:
+            role = str(message.get("role") or "user")
+            content = message.get("content")
+            normalized_messages.append(
+                {
+                    "role": role,
+                    "content": "" if content is None else str(content),
+                }
+            )
+        return normalized_messages
+
+    def _apply_request_mode_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_mode: str,
+        prompt_text: str,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        adjusted_payload = dict(payload)
+        if request_mode == "completions":
+            if "messages" not in adjusted_payload:
+                if "input" in adjusted_payload:
+                    input_value = adjusted_payload.pop("input")
+                    if isinstance(input_value, str) and input_value.strip():
+                        adjusted_payload["messages"] = [{"role": "user", "content": input_value}]
+                    else:
+                        adjusted_payload["messages"] = messages
+                else:
+                    adjusted_payload["messages"] = messages
+            if "max_tokens" not in adjusted_payload and "max_output_tokens" in adjusted_payload:
+                adjusted_payload["max_tokens"] = adjusted_payload.pop("max_output_tokens")
+            return adjusted_payload
+
+        # responses/default mode
+        if "input" not in adjusted_payload and "messages" not in adjusted_payload:
+            adjusted_payload["input"] = prompt_text
+        return adjusted_payload
 
     def _extract_by_path(self, data: Any, path: str) -> Any | None:
         if not path:
@@ -225,16 +284,19 @@ class OpenAICompatibleProvider:
         return "unknown"
 
     def send_prompt(self, messages: list[dict[str, Any]], params: dict[str, Any]) -> ProviderResponse:
+        normalized_messages = self._normalize_messages(messages)
         prompt_text = ""
-        for msg in reversed(messages):
+        for msg in reversed(normalized_messages):
             if msg.get("role") == "user":
                 prompt_text = str(msg.get("content", ""))
                 break
-        if not prompt_text and messages:
-            prompt_text = str(messages[-1].get("content", ""))
+        if not prompt_text and normalized_messages:
+            prompt_text = str(normalized_messages[-1].get("content", ""))
         runtime_vars = dict(self.variables)
         runtime_vars["MODEL_NAME"] = self.endpoint.model_name
         runtime_vars["PROMPT"] = prompt_text
+        runtime_vars["MESSAGES"] = normalized_messages
+        request_mode = self._normalize_request_mode(getattr(self.endpoint, "request_mode", "responses"))
 
         payload_template = self.endpoint.default_params
         if not isinstance(payload_template, dict):
@@ -250,6 +312,12 @@ class OpenAICompatibleProvider:
             if key in payload:
                 payload[key] = value
         payload = self._replace_placeholders(payload, runtime_vars)
+        payload = self._apply_request_mode_payload(
+            payload,
+            request_mode=request_mode,
+            prompt_text=prompt_text,
+            messages=normalized_messages,
+        )
 
         base_url = self.endpoint.base_url.rstrip("/")
         endpoint_path = (self.endpoint.endpoint_path or "").lstrip("/")
@@ -262,10 +330,11 @@ class OpenAICompatibleProvider:
         request_id = f"req-{uuid4().hex[:8]}"
         self.logger.info("Sending request request_id=%s to provider %s", request_id, url)
         self.logger.debug(
-            "Provider request details request_id=%s endpoint=%s provider=%s method=POST url=%s prompt_chars=%s timeout=%s retries=%s ssl_verify=%s headers=%s payload=%s",
+            "Provider request details request_id=%s endpoint=%s provider=%s request_mode=%s method=POST url=%s prompt_chars=%s timeout=%s retries=%s ssl_verify=%s headers=%s payload=%s",
             request_id,
             self.endpoint.name,
             self.endpoint.provider,
+            request_mode,
             url,
             len(prompt_text),
             timeout or 30,
@@ -304,7 +373,8 @@ class OpenAICompatibleProvider:
                     header_names = ", ".join(headers.keys())
                     raise requests.HTTPError(
                         "401 Unauthorized. Check token and auth headers. "
-                        "For OpenAI Responses, use Authorization: Bearer {{API_TOKEN}}. "
+                        "For OpenAI-style APIs, use Authorization: Bearer {{API_TOKEN}} "
+                        "and confirm endpoint URL + request mode (Responses/Completions). "
                         f"Headers sent: {header_names}",
                         response=exc.response,
                     ) from exc

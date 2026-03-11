@@ -65,6 +65,12 @@ Detailed guides:
 ## Configuration
 Default settings live in `config.toml`. Runtime overrides are stored in the `settings` table and managed from the UI.
 
+Endpoint settings also include `API version` with options:
+- `Response` (for APIs like `/v1/responses`)
+- `Chat Completion` (for APIs like `/v1/chat/completions`)
+
+This endpoint-level mode is respected automatically in `Chat`, `Automated Tests`, and `Red Teaming`.
+
 Automated Tests module settings (in `Configuration > Automated Test Settings`) include:
 - parallel thread count (`tests_max_threads`)
 - request timeout (`tests_request_timeout`)
@@ -94,6 +100,7 @@ These types are reflected in runtime editors in `Chat`, `Automated Tests`, and `
 ## Documentation
 - `docs/OVERVIEW.md`
 - `docs/GETTING_STARTED.md`
+- `docs/USER_GUIDE.md`
 - `docs/MODULES.md`
 - `docs/CONFIGURATION.md`
 - `docs/OPERATIONS.md`
@@ -147,6 +154,8 @@ Generated default files:
 - `examples/default_imports/cyberprompt_ai_default_test_suites.json`
 - `examples/default_imports/cyberprompt_ai_default_red_team_suites.xlsx`
 - `examples/default_imports/cyberprompt_ai_default_red_team_suites.json`
+
+`cyberprompt_ai_default_endpoints.*` now includes both `Response` and `Chat Completion` examples.
 
 Compatibility note:
 - Existing environment variables remain `PROMPTOPS_*`.

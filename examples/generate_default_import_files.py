@@ -41,6 +41,7 @@ def _default_endpoints() -> list[dict[str, Any]]:
             "provider": "OpenAI",
             "endpoint_url": "https://api.openai.com/v1/responses",
             "model_name": "gpt-4.1-mini",
+            "request_mode": "responses",
             "headers": {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer {{API_TOKEN}}",
@@ -57,10 +58,37 @@ def _default_endpoints() -> list[dict[str, Any]]:
             "api_token": "",
         },
         {
+            "name": "OpenAI Chat Completion - GPT 4.1 Mini",
+            "provider": "OpenAI",
+            "endpoint_url": "https://api.openai.com/v1/chat/completions",
+            "model_name": "gpt-4.1-mini",
+            "request_mode": "completions",
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer {{API_TOKEN}}",
+            },
+            "body": {
+                "model": "{{MODEL_NAME}}",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "{{PROMPT}}",
+                    }
+                ],
+                "max_tokens": 1000,
+                "temperature": 0.7,
+            },
+            "response_paths": "$choices[0].message.content",
+            "response_type": "json",
+            "additional_variables": {},
+            "api_token": "",
+        },
+        {
             "name": "Anthropic Messages - Sonnet",
             "provider": "Anthropic",
             "endpoint_url": "https://api.anthropic.com/v1/messages",
             "model_name": "claude-sonnet-4-5",
+            "request_mode": "responses",
             "headers": {
                 "Content-Type": "application/json",
                 "x-api-key": "{{API_TOKEN}}",
@@ -87,6 +115,7 @@ def _default_endpoints() -> list[dict[str, Any]]:
             "provider": "Google Gemini",
             "endpoint_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={{API_TOKEN}}",
             "model_name": "gemini-2.0-flash",
+            "request_mode": "responses",
             "headers": {
                 "Content-Type": "application/json",
             },
@@ -102,6 +131,35 @@ def _default_endpoints() -> list[dict[str, Any]]:
                 ]
             },
             "response_paths": "$candidates[0].content.parts[0].text",
+            "response_type": "json",
+            "additional_variables": {},
+            "api_token": "",
+        },
+        {
+            "name": "Azure OpenAI Chat Completion - Example",
+            "provider": "Azure Foundry",
+            "endpoint_url": "https://YOUR_RESOURCE.openai.azure.com/openai/deployments/{{MODEL_NAME}}/chat/completions?api-version=2024-06-01",
+            "model_name": "gpt-4.1-mini",
+            "request_mode": "completions",
+            "headers": {
+                "Content-Type": "application/json",
+                "api-key": "{{API_TOKEN}}",
+            },
+            "body": {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "{{PROMPT}}",
+                    }
+                ],
+                "max_tokens": 1000,
+                "temperature": 0.7,
+            },
+            "response_paths": "$choices[0].message.content",
             "response_type": "json",
             "additional_variables": {},
             "api_token": "",

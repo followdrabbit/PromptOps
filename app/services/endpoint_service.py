@@ -20,6 +20,18 @@ TEMPLATE_VAR_PATTERNS = (
     re.compile(r"<(" + TEMPLATE_VAR_NAME + r")>"),
 )
 BARE_RESERVED_PATTERN = re.compile(r"\b(API_TOKEN|MODEL_NAME|PROMPT)\b")
+REQUEST_MODE_ALIASES = {
+    "responses": "responses",
+    "response": "responses",
+    "completions": "completions",
+    "completion": "completions",
+    "chat completion": "completions",
+    "chat completions": "completions",
+    "chat_completions": "completions",
+    "chat-completions": "completions",
+    "completation": "completions",
+    "completations": "completions",
+}
 
 
 def _split_endpoint_url(url: str) -> tuple[str, str]:
@@ -173,6 +185,16 @@ def _parse_json_object(value: Any, *, field_name: str, row_index: int) -> dict[s
     raise ValueError(f"row {row_index}: '{field_name}' must be a JSON object")
 
 
+def normalize_request_mode(value: Any, *, default: str = "responses", strict: bool = False) -> str:
+    normalized = str(value or default).strip().lower()
+    mapped = REQUEST_MODE_ALIASES.get(normalized)
+    if not mapped:
+        if strict:
+            raise ValueError(f"unsupported request_mode '{value}'")
+        return default
+    return mapped
+
+
 def list_endpoints(session: Session) -> list[models.Endpoint]:
     return session.query(models.Endpoint).order_by(models.Endpoint.name.asc()).all()
 
@@ -189,6 +211,8 @@ def create_endpoint(
     variable_values: dict[str, Any] | None = None,
     variable_types: dict[str, str] | None = None,
 ) -> models.Endpoint:
+    if "request_mode" in data:
+        data["request_mode"] = normalize_request_mode(data.get("request_mode"), default="responses", strict=True)
     endpoint = models.Endpoint(**data)
     session.add(endpoint)
     session.flush()
@@ -225,11 +249,14 @@ def update_endpoint(
         "base_url": endpoint.base_url,
         "endpoint_path": endpoint.endpoint_path,
         "model_name": endpoint.model_name,
+        "request_mode": endpoint.request_mode,
         "auth_type": endpoint.auth_type,
         "response_paths": endpoint.response_paths,
         "response_type": endpoint.response_type,
     }
     for key, value in data.items():
+        if key == "request_mode":
+            value = normalize_request_mode(value, default="responses", strict=True)
         setattr(endpoint, key, value)
 
     if variable_values is not None or secret_value:
@@ -254,6 +281,74 @@ def update_endpoint(
 def delete_endpoint(session: Session, endpoint: models.Endpoint) -> None:
     record_event(session, "delete", "endpoint", endpoint.id, before_value={"name": endpoint.name})
     session.delete(endpoint)
+
+
+def _build_clone_name(session: Session, base_name: str) -> str:
+    existing_names = {
+        (endpoint.name or "").strip().lower()
+        for endpoint in list_endpoints(session)
+        if endpoint.name
+    }
+    candidate = (base_name or "").strip() or "Endpoint Copy"
+    if candidate.lower() not in existing_names:
+        return candidate
+
+    counter = 2
+    while True:
+        attempt = f"{candidate} ({counter})"
+        if attempt.lower() not in existing_names:
+            return attempt
+        counter += 1
+
+
+def clone_endpoint(
+    session: Session,
+    source_endpoint: models.Endpoint,
+    clone_name: str | None = None,
+) -> models.Endpoint:
+    source_name = (source_endpoint.name or "").strip() or "Endpoint"
+    requested_name = (clone_name or "").strip() or f"{source_name} (Copy)"
+    final_name = _build_clone_name(session, requested_name)
+
+    data = {
+        "name": final_name,
+        "provider": source_endpoint.provider,
+        "base_url": source_endpoint.base_url,
+        "endpoint_path": source_endpoint.endpoint_path,
+        "model_name": source_endpoint.model_name,
+        "request_mode": normalize_request_mode(getattr(source_endpoint, "request_mode", "responses")),
+        "auth_type": source_endpoint.auth_type,
+        "auth_header": source_endpoint.auth_header,
+        "auth_prefix": source_endpoint.auth_prefix,
+        "custom_headers": source_endpoint.custom_headers,
+        "default_params": source_endpoint.default_params,
+        "timeout": source_endpoint.timeout,
+        "retry_count": source_endpoint.retry_count,
+        "response_paths": source_endpoint.response_paths,
+        "response_type": source_endpoint.response_type,
+    }
+
+    secret_manager = SecretManager()
+    variable_values = secret_manager.get_variables(session, source_endpoint.id)
+    variable_types = secret_manager.get_variable_types(session, source_endpoint.id)
+
+    cloned = create_endpoint(
+        session,
+        data,
+        None,
+        secret_type="none",
+        variable_values=variable_values,
+        variable_types=variable_types,
+    )
+    record_event(
+        session,
+        "clone",
+        "endpoint",
+        cloned.id,
+        before_value={"source_endpoint_id": source_endpoint.id, "source_name": source_endpoint.name},
+        after_value={"name": cloned.name},
+    )
+    return cloned
 
 
 def endpoints_to_records(session: Session, endpoints: list[models.Endpoint]) -> list[dict[str, Any]]:
@@ -284,6 +379,7 @@ def endpoints_to_records(session: Session, endpoints: list[models.Endpoint]) -> 
                 "provider": endpoint.provider,
                 "endpoint_url": _compose_endpoint_url(endpoint.base_url, endpoint.endpoint_path),
                 "model_name": endpoint.model_name,
+                "request_mode": normalize_request_mode(getattr(endpoint, "request_mode", "responses")),
                 "headers": endpoint.custom_headers or {},
                 "body": endpoint.default_params or {},
                 "response_paths": endpoint.response_paths or "",
@@ -319,6 +415,7 @@ def validate_endpoint_records(
         body_raw = _read_value(row, ["body", "default_params"])
         response_paths_raw = _read_value(row, ["response_paths", "response_json_paths"])
         response_type_raw = _read_value(row, ["response_type"])
+        request_mode_raw = _read_value(row, ["request_mode", "api_pattern", "request_pattern"])
         additional_vars_raw = _read_value(row, ["additional_variables", "variables", "extra_variables"])
         api_token_raw = _read_value(row, ["api_token", "API_TOKEN", "key"])
 
@@ -328,6 +425,13 @@ def validate_endpoint_records(
         model_name = "" if _is_missing(model_name_raw) else str(model_name_raw).strip()
         response_paths = "" if _is_missing(response_paths_raw) else str(response_paths_raw).strip()
         response_type = "json" if _is_missing(response_type_raw) else str(response_type_raw).strip().lower()
+        try:
+            request_mode = normalize_request_mode(request_mode_raw, default="responses", strict=True)
+        except ValueError:
+            errors.append(
+                f"row {row_index}: 'request_mode' must be 'responses' or 'completions'"
+            )
+            continue
 
         if not name and not provider and not endpoint_url and not model_name:
             continue
@@ -414,6 +518,7 @@ def validate_endpoint_records(
                 "model_name": model_name,
                 "custom_headers": headers,
                 "default_params": body,
+                "request_mode": request_mode,
                 "response_paths": response_paths or None,
                 "response_type": response_type,
                 "timeout": int(default_timeout),
@@ -453,6 +558,7 @@ def import_endpoint_records(session: Session, records: list[dict[str, Any]]) -> 
             "auth_prefix": None,
             "custom_headers": record["custom_headers"],
             "default_params": record["default_params"],
+            "request_mode": normalize_request_mode(record.get("request_mode", "responses"), strict=True),
             "timeout": int(record.get("timeout", 30)),
             "retry_count": int(record.get("retry_count", 0)),
             "response_paths": record.get("response_paths"),

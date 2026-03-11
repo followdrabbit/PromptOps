@@ -34,6 +34,7 @@ class EndpointSchema(BaseModel):
     auth_prefix: Optional[str] = None
     custom_headers: Optional[dict[str, Any]] = None
     default_params: Optional[dict[str, Any]] = None
+    request_mode: str = "responses"
     response_paths: Optional[str] = None
     response_type: Optional[str] = None
     timeout: Optional[int] = None

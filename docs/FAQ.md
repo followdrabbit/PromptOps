@@ -12,6 +12,13 @@ Secrets are stored in `endpoint_secrets` as encrypted blobs, separate from endpo
 ## Can I use non-OpenAI providers?
 Yes. Endpoint registration is template-driven (`URL`, `Headers`, `Body`, `Response JSON PATHs`) and supports vendor-agnostic request/response mappings.
 
+## How do I choose between Responses and Completions?
+In endpoint configuration, set `API request mode`:
+- `responses` for APIs like `/v1/responses`
+- `completions` for APIs like `/v1/chat/completions`
+
+The selected mode is automatically applied in Chat, Automated Tests, and Red Teaming.
+
 ## How do Additional variables work?
 Define typed variables in endpoint configuration and reference them in headers/body using placeholders. At runtime (Chat/Automated Tests/Red Teaming) you can override values without changing saved endpoint defaults.
 

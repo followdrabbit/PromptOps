@@ -31,3 +31,9 @@ CyberPrompt AI is an operations and security-focused platform for managing AI en
 4. Create/import suites.
 5. Use `Chat`/`Compare` for exploratory checks.
 6. Use `Automated Tests` and `Red Teaming` for repeatable evaluation and evidence generation.
+
+## Recommended Reading Order
+1. `docs/GETTING_STARTED.md`
+2. `docs/USER_GUIDE.md`
+3. `docs/MODULES.md`
+4. `docs/SECURITY.md`

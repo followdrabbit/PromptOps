@@ -14,6 +14,7 @@ from app.ui.utils import get_runtime_settings
 DOC_TABS: list[tuple[str, str]] = [
     ("docs_tab_overview", "docs/OVERVIEW.md"),
     ("docs_tab_getting_started", "docs/GETTING_STARTED.md"),
+    ("docs_tab_user_guide", "docs/USER_GUIDE.md"),
     ("docs_tab_modules", "docs/MODULES.md"),
     ("docs_tab_configuration", "docs/CONFIGURATION.md"),
     ("docs_tab_operations", "docs/OPERATIONS.md"),

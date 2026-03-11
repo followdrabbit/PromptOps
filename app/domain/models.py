@@ -58,6 +58,7 @@ class Endpoint(Base):
     auth_prefix = Column(String(40), nullable=True)
     custom_headers = Column(JSON, nullable=True)
     default_params = Column(JSON, nullable=True)
+    request_mode = Column(String(30), nullable=False, default="responses")
     response_paths = Column(Text, nullable=True)
     response_type = Column(String(30), nullable=True)
     timeout = Column(Integer, nullable=True)

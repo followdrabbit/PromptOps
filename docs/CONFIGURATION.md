@@ -37,6 +37,7 @@ Primary fields:
 - `Provider`
 - `Endpoint URL`
 - `Model Name`
+- `API version` (`Response` or `Chat Completion`)
 - `Headers (JSON)`
 - `Body (JSON)`
 - `Response JSON PATHs`
@@ -51,6 +52,11 @@ Reserved placeholders:
 - `{{MODEL_NAME}}`: sourced from endpoint model name
 - `{{PROMPT}}`: sourced from runtime input (chat/test/red-team prompt)
 
+API version:
+- `Response`: optimized for endpoints like `/v1/responses` (payload usually uses `input`).
+- `Chat Completion`: optimized for endpoints like `/v1/chat/completions` (payload uses `messages`).
+- The selected mode is applied automatically in `Chat`, `Automated Tests`, and `Red Teaming` for the selected endpoint.
+
 Additional variables format:
 ```json
 {
@@ -63,6 +69,7 @@ Additional variables format:
 
 Capabilities:
 - Create / Edit / Delete
+- Clone (duplicate endpoint configuration and variables, then adjust only required fields)
 - Import / Export (`xlsx` and `json`)
 - Template download in both formats
 - Export does not include secret values

@@ -65,6 +65,7 @@ def _generate_sample_endpoints(output_dir: Path) -> tuple[Path, Path]:
             "provider": "OpenAI",
             "endpoint_url": "https://api.openai.com/v1/responses",
             "model_name": "gpt-4.1-mini",
+            "request_mode": "responses",
             "headers": {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer {{API_TOKEN}}",
@@ -85,6 +86,7 @@ def _generate_sample_endpoints(output_dir: Path) -> tuple[Path, Path]:
             "provider": "Anthropic",
             "endpoint_url": "https://api.anthropic.com/v1/messages",
             "model_name": "claude-sonnet-4-5",
+            "request_mode": "responses",
             "headers": {
                 "Content-Type": "application/json",
                 "x-api-key": "{{API_TOKEN}}",
@@ -107,6 +109,36 @@ def _generate_sample_endpoints(output_dir: Path) -> tuple[Path, Path]:
             "additional_variables": {"SYSTEM_PROMPT": "You are a helpful assistant."},
             "api_token": "",
         },
+        {
+            "name": "OpenAI Chat Completion - GPT 4.1 Mini",
+            "provider": "OpenAI",
+            "endpoint_url": "https://api.openai.com/v1/chat/completions",
+            "model_name": "gpt-4.1-mini",
+            "request_mode": "completions",
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer {{API_TOKEN}}",
+            },
+            "body": {
+                "model": "{{MODEL_NAME}}",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "{{PROMPT}}",
+                    }
+                ],
+                "max_tokens": 1000,
+                "temperature": 0.7,
+            },
+            "response_paths": "$choices[0].message.content",
+            "response_type": "json",
+            "additional_variables": {},
+            "api_token": "",
+        },
     ]
 
     xlsx_records: list[dict[str, object]] = []
@@ -117,6 +149,7 @@ def _generate_sample_endpoints(output_dir: Path) -> tuple[Path, Path]:
                 "provider": record["provider"],
                 "endpoint_url": record["endpoint_url"],
                 "model_name": record["model_name"],
+                "request_mode": record["request_mode"],
                 "headers": json.dumps(record["headers"], ensure_ascii=False),
                 "body": json.dumps(record["body"], ensure_ascii=False),
                 "response_paths": record["response_paths"],

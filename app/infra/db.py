@@ -26,12 +26,19 @@ def _ensure_endpoint_columns(engine) -> None:
     columns = {
         "response_paths": "response_paths TEXT",
         "response_type": "response_type TEXT",
+        "request_mode": "request_mode TEXT DEFAULT 'responses'",
     }
     with engine.begin() as conn:
         existing = [row[1] for row in conn.execute(text("PRAGMA table_info(endpoints)"))]
         for name, ddl in columns.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE endpoints ADD COLUMN {ddl}"))
+        conn.execute(
+            text(
+                "UPDATE endpoints SET request_mode = 'responses' "
+                "WHERE request_mode IS NULL OR TRIM(request_mode) = ''"
+            )
+        )
 
 
 def _ensure_red_team_result_columns(engine) -> None:

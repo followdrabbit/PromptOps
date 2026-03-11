@@ -4,6 +4,7 @@
     "provider": "OpenAI",
     "endpoint_url": "https://api.openai.com/v1/responses",
     "model_name": "gpt-4.1-mini",
+    "request_mode": "responses",
     "headers": {
       "Content-Type": "application/json",
       "Authorization": "Bearer {{API_TOKEN}}"
@@ -24,6 +25,7 @@
     "provider": "Anthropic",
     "endpoint_url": "https://api.anthropic.com/v1/messages",
     "model_name": "claude-sonnet-4-5",
+    "request_mode": "responses",
     "headers": {
       "Content-Type": "application/json",
       "x-api-key": "{{API_TOKEN}}",
@@ -46,6 +48,36 @@
     "additional_variables": {
       "SYSTEM_PROMPT": "You are a helpful assistant."
     },
+    "api_token": ""
+  },
+  {
+    "name": "OpenAI Chat Completion - GPT 4.1 Mini",
+    "provider": "OpenAI",
+    "endpoint_url": "https://api.openai.com/v1/chat/completions",
+    "model_name": "gpt-4.1-mini",
+    "request_mode": "completions",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{API_TOKEN}}"
+    },
+    "body": {
+      "model": "{{MODEL_NAME}}",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful assistant."
+        },
+        {
+          "role": "user",
+          "content": "{{PROMPT}}"
+        }
+      ],
+      "max_tokens": 1000,
+      "temperature": 0.7
+    },
+    "response_paths": "$choices[0].message.content",
+    "response_type": "json",
+    "additional_variables": {},
     "api_token": ""
   }
 ]

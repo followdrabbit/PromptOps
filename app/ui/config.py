@@ -20,12 +20,14 @@ from app.domain import models
 from app.infra.db import get_session
 from app.services.audit_service import record_event
 from app.services.endpoint_service import (
+    clone_endpoint,
     create_endpoint,
     delete_endpoint,
     endpoints_to_records,
     get_endpoint,
     import_endpoint_records,
     list_endpoints,
+    normalize_request_mode,
     update_endpoint,
     validate_endpoint_records,
 )
@@ -883,6 +885,7 @@ def render(context: dict) -> None:
     if config_page == "endpoints":
         with get_session(session_factory) as session:
             endpoint_import_flash_key = "endpoint_import_flash_messages"
+            endpoint_clone_flash_key = "endpoint_clone_flash_message"
             flash_messages = st.session_state.pop(endpoint_import_flash_key, [])
             for level, message in flash_messages:
                 if level == "warning":
@@ -891,6 +894,9 @@ def render(context: dict) -> None:
                     st.error(message)
                 else:
                     st.success(message)
+            clone_flash_message = st.session_state.pop(endpoint_clone_flash_key, None)
+            if clone_flash_message:
+                st.success(clone_flash_message)
 
             st.subheader(tr("section_registered_endpoints"))
             settings = get_runtime_settings(session, config)
@@ -906,6 +912,11 @@ def render(context: dict) -> None:
                             tr("table_name"): ep.name,
                             tr("table_provider"): ep.provider,
                             tr("table_model"): ep.model_name,
+                            tr("table_request_mode"): (
+                                tr("option_request_mode_responses")
+                                if normalize_request_mode(getattr(ep, "request_mode", "responses")) == "responses"
+                                else tr("option_request_mode_completions")
+                            ),
                         }
                         for ep in endpoints
                     ],
@@ -929,6 +940,7 @@ def render(context: dict) -> None:
                     "create_ep_provider_text": "",
                     "create_ep_url": "",
                     "create_ep_model_name": "",
+                    "create_ep_request_mode": "",
                     "create_ep_api_token": "",
                     "create_ep_headers": "",
                     "create_ep_body": "",
@@ -951,6 +963,7 @@ def render(context: dict) -> None:
                         st.session_state["create_ep_provider_text"] = "OpenAI"
                     st.session_state["create_ep_url"] = "https://api.openai.com/v1/responses"
                     st.session_state["create_ep_model_name"] = "gpt-4.1-mini"
+                    st.session_state["create_ep_request_mode"] = "responses"
                     st.session_state["create_ep_headers"] = (
                         '{\n'
                         '  "Content-Type": "application/json",\n'
@@ -1008,6 +1021,19 @@ def render(context: dict) -> None:
                         help=tr("help_model_name"),
                         key="create_ep_model_name",
                     )
+                    request_mode = st.selectbox(
+                        tr("label_request_mode"),
+                        ["", "responses", "completions"],
+                        format_func=lambda val: tr("option_select")
+                        if not val
+                        else (
+                            tr("option_request_mode_responses")
+                            if val == "responses"
+                            else tr("option_request_mode_completions")
+                        ),
+                        help=tr("help_request_mode"),
+                        key="create_ep_request_mode",
+                    )
                     api_token = st.text_input(
                         tr("label_api_token"),
                         type="password",
@@ -1063,6 +1089,8 @@ def render(context: dict) -> None:
                                 required_fields.append(tr("label_endpoint_url"))
                             if not model_name.strip():
                                 required_fields.append(tr("label_model_name"))
+                            if not request_mode.strip():
+                                required_fields.append(tr("label_request_mode"))
                             if not response_type.strip():
                                 required_fields.append(tr("label_response_type"))
                             if required_fields:
@@ -1094,6 +1122,7 @@ def render(context: dict) -> None:
                                         "base_url": base_url,
                                         "endpoint_path": endpoint_path,
                                         "model_name": model_name,
+                                        "request_mode": normalize_request_mode(request_mode),
                                         "auth_type": "none",
                                         "auth_header": None,
                                         "auth_prefix": None,
@@ -1125,6 +1154,12 @@ def render(context: dict) -> None:
                 if not endpoints:
                     st.info(tr("no_endpoints"))
                 else:
+                    pending_edit_endpoint_select_key = "pending_edit_endpoint_select"
+                    valid_endpoint_ids = {ep.id for ep in endpoints}
+                    if pending_edit_endpoint_select_key in st.session_state:
+                        pending_selected_id = st.session_state.pop(pending_edit_endpoint_select_key)
+                        if pending_selected_id in valid_endpoint_ids or pending_selected_id is None:
+                            st.session_state["edit_endpoint_select"] = pending_selected_id
                     selected_id = st.selectbox(
                         tr("label_select_endpoint"),
                         options=[None] + [ep.id for ep in endpoints],
@@ -1142,6 +1177,31 @@ def render(context: dict) -> None:
                         endpoint_variable_types = (
                             secret_manager.get_variable_types(session, endpoint.id) if endpoint else {}
                         )
+                        st.markdown(f"**{tr('section_clone_endpoint')}**")
+                        clone_name_key = f"clone_endpoint_name_{endpoint.id}"
+                        if clone_name_key not in st.session_state:
+                            st.session_state[clone_name_key] = f"{endpoint.name} (Copy)"
+                        with st.form(f"clone_endpoint_form_{endpoint.id}"):
+                            clone_name = st.text_input(
+                                tr("label_clone_endpoint_name"),
+                                key=clone_name_key,
+                                help=tr("help_clone_endpoint_name"),
+                            )
+                            clone_submit = st.form_submit_button(tr("button_clone_endpoint"))
+                            if clone_submit:
+                                try:
+                                    cloned_endpoint = clone_endpoint(session, endpoint, clone_name)
+                                    session.commit()
+                                    st.session_state[pending_edit_endpoint_select_key] = cloned_endpoint.id
+                                    st.session_state[endpoint_clone_flash_key] = tr(
+                                        "msg_endpoint_cloned",
+                                        source=endpoint.name,
+                                        clone=cloned_endpoint.name,
+                                    )
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(tr("error_failed_clone_endpoint", error=exc))
+
                         stored_api_token = str(endpoint_variables.get("API_TOKEN", "") or "")
                         masked_token = mask_secret(stored_api_token, show_last=4) if stored_api_token else tr("secret_not_set")
                         stored_custom_variables = {
@@ -1211,6 +1271,25 @@ def render(context: dict) -> None:
                                 tr("label_model_name"),
                                 value=endpoint.model_name if endpoint else "",
                                 help=tr("help_model_name"),
+                            )
+                            try:
+                                endpoint_request_mode = normalize_request_mode(
+                                    getattr(endpoint, "request_mode", "responses"),
+                                    default="responses",
+                                )
+                            except ValueError:
+                                endpoint_request_mode = "responses"
+                            request_mode_options = ["responses", "completions"]
+                            request_mode = st.selectbox(
+                                tr("label_request_mode"),
+                                request_mode_options,
+                                index=request_mode_options.index(endpoint_request_mode),
+                                format_func=lambda val: (
+                                    tr("option_request_mode_responses")
+                                    if val == "responses"
+                                    else tr("option_request_mode_completions")
+                                ),
+                                help=tr("help_request_mode"),
                             )
                             st.caption(tr("label_stored_secret", value=masked_token))
                             api_token = st.text_input(
@@ -1284,6 +1363,7 @@ def render(context: dict) -> None:
                                             "base_url": base_url,
                                             "endpoint_path": endpoint_path,
                                             "model_name": model_name,
+                                            "request_mode": normalize_request_mode(request_mode),
                                             "auth_type": "none",
                                             "auth_header": None,
                                             "auth_prefix": None,

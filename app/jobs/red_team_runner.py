@@ -33,6 +33,7 @@ def _build_endpoint_config(endpoint: models.Endpoint) -> Any:
         auth_prefix=endpoint.auth_prefix,
         custom_headers=endpoint.custom_headers,
         default_params=endpoint.default_params,
+        request_mode=getattr(endpoint, "request_mode", "responses"),
         timeout=endpoint.timeout,
         retry_count=endpoint.retry_count,
         response_paths=endpoint.response_paths,

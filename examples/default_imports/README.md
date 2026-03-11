@@ -21,5 +21,7 @@ These files are ready to be imported in CyberPrompt AI with baseline configurati
 Notes:
 - Endpoint `api_token` values are intentionally blank for security.
 - Update keys/tokens after importing endpoints.
+- Endpoint files include `request_mode` (`responses` or `completions`).
+- Endpoint examples include both `Response` and `Chat Completion` cases.
 - Test suite files include suite metadata and prompts in the same structure.
 - Red team files include suite metadata, prompts, and evaluation criteria fields.
