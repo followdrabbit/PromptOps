@@ -26,7 +26,9 @@ Validation checklist:
 - `Chat Completion` for `/v1/chat/completions`
 4. Add `Headers (JSON)` and `Body (JSON)` templates.
 5. Define `Response JSON PATHs` and `Response type`.
-6. Add API token and save.
+6. Add API token.
+7. Use `Test endpoint connection` to validate settings without leaving the screen.
+8. Save endpoint.
 
 Tip:
 - If you need a variation, clone an existing endpoint and change only URL/mode/body.

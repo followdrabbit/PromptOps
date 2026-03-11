@@ -73,7 +73,8 @@ How to use:
 - `Response` for `/v1/responses` style APIs.
 - `Chat Completion` for `/v1/chat/completions` style APIs.
 3. Configure `Additional variables (JSON)` for model-specific parameters.
-4. Save and validate in `Chat`.
+4. Use `Test endpoint connection` to validate endpoint config on the same screen.
+5. Save and validate in `Chat`.
 
 Clone workflow:
 1. Open `Endpoint Settings > Edit`.

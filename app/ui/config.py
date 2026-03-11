@@ -5,11 +5,13 @@ import re
 from datetime import datetime
 from html import escape as html_escape
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
 
+from app.adapters.registry import get_provider_class
 from app.core.config import AppConfig
 from app.core.logging import set_log_level
 from app.core.redaction import mask_secret
@@ -239,6 +241,106 @@ def _serialize_variable_definitions(
         }
         for key in sorted(values.keys())
     }
+
+
+def _truncate_text(value: str, limit: int = 800) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}... [truncated {len(value) - limit} chars]"
+
+
+def _test_endpoint_connection(
+    *,
+    provider: str,
+    endpoint_url: str,
+    model_name: str,
+    request_mode: str,
+    custom_headers_raw: str,
+    default_params_raw: str,
+    response_paths: str,
+    response_type: str,
+    extra_variables_raw: str,
+    api_token: str,
+    stored_api_token: str | None = None,
+    test_prompt: str,
+    default_timeout: int,
+    verify_ssl: bool,
+    tr,
+) -> tuple[str, int | None]:
+    provider_name = (provider or "").strip()
+    endpoint_url_value = (endpoint_url or "").strip()
+    model_name_value = (model_name or "").strip()
+    request_mode_value = (request_mode or "").strip()
+    response_type_value = (response_type or "").strip() or "json"
+    prompt_value = (test_prompt or "").strip()
+
+    missing_fields: list[str] = []
+    if not provider_name:
+        missing_fields.append(tr("label_provider"))
+    if not endpoint_url_value:
+        missing_fields.append(tr("label_endpoint_url"))
+    if not model_name_value:
+        missing_fields.append(tr("label_model_name"))
+    if not request_mode_value:
+        missing_fields.append(tr("label_request_mode"))
+    if not prompt_value:
+        missing_fields.append(tr("label_test_prompt"))
+    if missing_fields:
+        raise ValueError(tr("error_required_fields", fields=", ".join(missing_fields)))
+
+    custom_headers = parse_json_field(custom_headers_raw) or {}
+    default_params = parse_json_field(default_params_raw) or {}
+    custom_variables, _custom_variable_types = _parse_variable_values(extra_variables_raw)
+    if not isinstance(custom_headers, dict) or not isinstance(default_params, dict):
+        raise ValueError(tr("error_invalid_json"))
+
+    detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
+    missing_variables = [
+        variable
+        for variable in detected_variables
+        if variable not in RESERVED_TEMPLATE_VARS and variable not in custom_variables
+    ]
+    if missing_variables:
+        raise ValueError(tr("error_missing_template_variables", variables=", ".join(missing_variables)))
+
+    resolved_api_token = (api_token or "").strip() or (stored_api_token or "").strip()
+    if "API_TOKEN" in detected_variables and not resolved_api_token:
+        raise ValueError(tr("error_api_token_required"))
+
+    base_url, endpoint_path = _split_endpoint_url(endpoint_url_value)
+    endpoint_config = SimpleNamespace(
+        name="connection-test",
+        provider=provider_name,
+        base_url=base_url,
+        endpoint_path=endpoint_path,
+        model_name=model_name_value,
+        request_mode=normalize_request_mode(request_mode_value),
+        auth_type="none",
+        auth_header=None,
+        auth_prefix=None,
+        custom_headers=custom_headers,
+        default_params=default_params,
+        timeout=int(default_timeout),
+        retry_count=0,
+        response_paths=response_paths or None,
+        response_type=response_type_value,
+    )
+
+    runtime_variables = dict(custom_variables)
+    runtime_variables["MODEL_NAME"] = model_name_value
+    if resolved_api_token:
+        runtime_variables["API_TOKEN"] = resolved_api_token
+
+    provider_adapter = get_provider_class(provider_name)(
+        endpoint_config,
+        runtime_variables,
+        verify_ssl=verify_ssl,
+    )
+    response = provider_adapter.send_prompt(
+        [{"role": "user", "content": prompt_value}],
+        {"timeout": int(default_timeout)},
+    )
+    return response.content or "", response.latency_ms
 
 
 def _load_provider_records(path: Path) -> list[dict]:
@@ -947,6 +1049,7 @@ def render(context: dict) -> None:
                     "create_ep_response_paths": "",
                     "create_ep_response_type": "",
                     "create_ep_extra_vars": "",
+                    "create_ep_test_prompt": tr("default_test_prompt"),
                 }
                 for state_key, state_value in create_defaults.items():
                     if state_key not in st.session_state:
@@ -1069,6 +1172,11 @@ def render(context: dict) -> None:
                         help=tr("help_additional_variables"),
                         key="create_ep_extra_vars",
                     )
+                    test_prompt = st.text_input(
+                        tr("label_test_prompt"),
+                        help=tr("help_test_prompt"),
+                        key="create_ep_test_prompt",
+                    )
                     detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
                     st.caption(
                         tr(
@@ -1076,9 +1184,40 @@ def render(context: dict) -> None:
                             values=", ".join(detected_variables) if detected_variables else tr("option_none"),
                         )
                     )
+                    test_connection = st.form_submit_button(
+                        tr("button_test_endpoint_connection"),
+                        type="secondary",
+                    )
                     submit = st.form_submit_button(tr("button_create_endpoint"))
 
-                    if submit:
+                    if test_connection:
+                        try:
+                            with st.spinner(tr("msg_testing_endpoint_connection")):
+                                response_content, latency_ms = _test_endpoint_connection(
+                                    provider=provider,
+                                    endpoint_url=endpoint_url,
+                                    model_name=model_name,
+                                    request_mode=request_mode,
+                                    custom_headers_raw=custom_headers_raw,
+                                    default_params_raw=default_params_raw,
+                                    response_paths=response_paths,
+                                    response_type=response_type,
+                                    extra_variables_raw=extra_variables_raw,
+                                    api_token=api_token,
+                                    test_prompt=test_prompt,
+                                    default_timeout=int(settings["default_timeout"]),
+                                    verify_ssl=settings.get("ssl_verify", True),
+                                    tr=tr,
+                                )
+                            st.success(tr("msg_test_endpoint_connection_success", latency=latency_ms or 0))
+                            if response_content:
+                                st.caption(tr("label_test_connection_response_preview"))
+                                st.code(_truncate_text(response_content), language="text")
+                        except (json.JSONDecodeError, ValueError) as exc:
+                            st.error(str(exc))
+                        except Exception as exc:
+                            st.error(tr("error_test_endpoint_connection_failed", error=exc))
+                    elif submit:
                         try:
                             required_fields: list[str] = []
                             if not name.strip():
@@ -1231,6 +1370,9 @@ def render(context: dict) -> None:
                             key=f"button_use_additional_variables_example_edit_{endpoint.id}",
                         ):
                             st.session_state[edit_extra_vars_key] = ADDITIONAL_VARIABLES_EXAMPLE_JSON
+                        edit_test_prompt_key = f"edit_ep_test_prompt_{endpoint.id}"
+                        if edit_test_prompt_key not in st.session_state:
+                            st.session_state[edit_test_prompt_key] = tr("default_test_prompt")
 
                         with st.form("edit_endpoint"):
                             name = st.text_input(
@@ -1325,6 +1467,11 @@ def render(context: dict) -> None:
                                 key=edit_extra_vars_key,
                                 help=tr("help_additional_variables"),
                             )
+                            test_prompt = st.text_input(
+                                tr("label_test_prompt"),
+                                key=edit_test_prompt_key,
+                                help=tr("help_test_prompt"),
+                            )
                             detected_variables = _extract_template_variables(custom_headers_raw, default_params_raw)
                             st.caption(
                                 tr(
@@ -1332,9 +1479,41 @@ def render(context: dict) -> None:
                                     values=", ".join(detected_variables) if detected_variables else tr("option_none"),
                                 )
                             )
+                            test_connection = st.form_submit_button(
+                                tr("button_test_endpoint_connection"),
+                                type="secondary",
+                            )
                             update = st.form_submit_button(tr("button_update_endpoint"))
 
-                            if update:
+                            if test_connection:
+                                try:
+                                    with st.spinner(tr("msg_testing_endpoint_connection")):
+                                        response_content, latency_ms = _test_endpoint_connection(
+                                            provider=provider,
+                                            endpoint_url=endpoint_url,
+                                            model_name=model_name,
+                                            request_mode=request_mode,
+                                            custom_headers_raw=custom_headers_raw,
+                                            default_params_raw=default_params_raw,
+                                            response_paths=response_paths,
+                                            response_type=response_type,
+                                            extra_variables_raw=extra_variables_raw,
+                                            api_token=api_token,
+                                            stored_api_token=stored_api_token,
+                                            test_prompt=test_prompt,
+                                            default_timeout=int(settings["default_timeout"]),
+                                            verify_ssl=settings.get("ssl_verify", True),
+                                            tr=tr,
+                                        )
+                                    st.success(tr("msg_test_endpoint_connection_success", latency=latency_ms or 0))
+                                    if response_content:
+                                        st.caption(tr("label_test_connection_response_preview"))
+                                        st.code(_truncate_text(response_content), language="text")
+                                except (json.JSONDecodeError, ValueError) as exc:
+                                    st.error(str(exc))
+                                except Exception as exc:
+                                    st.error(tr("error_test_endpoint_connection_failed", error=exc))
+                            elif update:
                                 try:
                                     custom_headers = parse_json_field(custom_headers_raw) or {}
                                     default_params = parse_json_field(default_params_raw) or {}

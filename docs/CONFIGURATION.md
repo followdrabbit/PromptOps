@@ -70,6 +70,7 @@ Additional variables format:
 Capabilities:
 - Create / Edit / Delete
 - Clone (duplicate endpoint configuration and variables, then adjust only required fields)
+- Test endpoint connection directly in Create/Edit (without changing module)
 - Import / Export (`xlsx` and `json`)
 - Template download in both formats
 - Export does not include secret values
